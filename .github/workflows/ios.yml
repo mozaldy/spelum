@@ -46,9 +46,7 @@ jobs:
 
       - name: Select Xcode 27.2
         run: |
-          if [[ -d "/Applications/Xcode_27.2.app/Contents/Developer" ]]; then
-            sudo xcode-select -s "/Applications/Xcode_27.2.app/Contents/Developer"
-          fi
+          sudo xcode-select -s /Applications/Xcode_27.2.app/Contents/Developer
           xcodebuild -version
           swift --version
 
@@ -110,7 +108,7 @@ jobs:
           xcodebuild test \
             -project Spelum.xcodeproj \
             -scheme MyApp \
-            -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }},OS=${{ steps.simulator.outputs.os }}"
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}"
 
       - name: Build Release for generic iOS
         run: |

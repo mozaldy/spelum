@@ -17,7 +17,7 @@ Spelum is an English-language native iPhone rehearsal app built with SwiftUI, Sw
 - **Target platform:** iPhone only (`TARGETED_DEVICE_FAMILY = 1`), minimum iOS `27.0`.
 - **Xcode:** Xcode `27.2` (verified on build `27B52`, Swift `6.4.2`).
 - **Project format:** `Spelum.xcodeproj/project.xcproj` uses Xcode 27's JSON `.xcproj` format (requires Xcode 27.0 or later). Edit project structure/settings with `xcrun xcodeproj` and normalize formatting with `xcrun xcprojformatter --update Spelum.xcodeproj`.
-- **CI runner:** GitHub-hosted `xcode-27` (`arm64`, macOS 27), explicitly selecting `/Applications/Xcode_27.2.app/Contents/Developer` when available.
+- **CI runner:** GitHub-hosted `xcode-27` (`arm64`, macOS 27), requiring `/Applications/Xcode_27.2.app/Contents/Developer`.
 - **Dependencies:** Prefer Apple first-party frameworks and Swift Testing / XCTest. The only required development tool outside Xcode is pinned SwiftLint.
 
 ## Pinned SwiftLint
