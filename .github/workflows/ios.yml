@@ -1,0 +1,123 @@
+name: iOS CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  swiftlint:
+    name: SwiftLint
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned SwiftLint
+        run: |
+          ./scripts/install-swiftlint.sh "${RUNNER_TEMP}/swiftlint/bin"
+          echo "${RUNNER_TEMP}/swiftlint/bin" >> "${GITHUB_PATH}"
+
+      - name: Record SwiftLint version
+        run: swiftlint version
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict --config .swiftlint.yml
+
+  ios-build-and-tests:
+    name: iOS build and tests
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 27.2
+        run: |
+          if [[ -d "/Applications/Xcode_27.2.app/Contents/Developer" ]]; then
+            sudo xcode-select -s "/Applications/Xcode_27.2.app/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Inspect project and resolve iOS 27 simulator
+        id: simulator
+        run: |
+          xcodebuild -list -project Spelum.xcodeproj
+          xcrun simctl list runtimes
+
+          RESOLVED_LINE="$(
+            python3 - <<'PY'
+          import json, re, subprocess, sys
+
+          runtimes_data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "-j"]))
+          devices_data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+
+          ios27_runtimes = []
+          for rt in runtimes_data.get("runtimes", []):
+              if not rt.get("isAvailable", False):
+                  continue
+              if rt.get("platform") != "iOS":
+                  continue
+              ver = rt.get("version", "")
+              if ver.startswith("27."):
+                  ios27_runtimes.append(rt)
+
+          # Prefer exact 27.0 to match local verification; fall back to highest available 27.x.
+          def sort_key(rt):
+              ver = rt.get("version", "0")
+              parts = [int(p) for p in re.findall(r"\d+", ver)]
+              return (0 if ver == "27.0" else 1, [-p for p in parts])
+
+          ios27_runtimes.sort(key=sort_key)
+
+          for rt in ios27_runtimes:
+              rt_id = rt["identifier"]
+              for dev in devices_data.get("devices", {}).get(rt_id, []):
+                  if dev.get("isAvailable", False) and dev.get("name") == "iPhone 17":
+                      print(f"{dev['udid']}|{dev['name']}|{rt['version']}|{rt.get('buildversion', 'unknown')}")
+                      sys.exit(0)
+
+          sys.stderr.write("No available iPhone 17 simulator found on an iOS 27.x runtime.\n")
+          sys.exit(1)
+          PY
+          )"
+
+          IFS='|' read -r SIM_UDID SIM_NAME SIM_OS SIM_BUILD <<< "${RESOLVED_LINE}"
+          echo "Resolved simulator: ${SIM_NAME} (iOS ${SIM_OS}, runtime build ${SIM_BUILD}, UDID ${SIM_UDID})"
+          {
+            echo "udid=${SIM_UDID}"
+            echo "name=${SIM_NAME}"
+            echo "os=${SIM_OS}"
+            echo "build=${SIM_BUILD}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Spelum.xcodeproj \
+            -scheme MyApp \
+            -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }},OS=${{ steps.simulator.outputs.os }}"
+
+      - name: Build Release for generic iOS
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Spelum.xcodeproj \
+            -scheme MyApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO
