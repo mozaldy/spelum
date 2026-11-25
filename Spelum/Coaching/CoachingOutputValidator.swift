@@ -16,216 +16,195 @@ nonisolated struct CoachingValidationVerdict: Equatable, Sendable {
 }
 
 nonisolated enum CoachingOutputValidator {
-    static let maxActionLength = 320
-    static let maxRationaleLength = 260
-
     static func validatePreparation(
-        raw: RawModelCoachingSuggestion,
+        selection: RawModelPreparationSelection,
         request: PreparationCoachingRequest,
         now: Date = Date()
     ) -> CoachingValidationVerdict {
-        guard let text = validateBaseText(
-            raw: raw,
-            knownSpeakerNames: request.knownSpeakerNames,
-            isMultiSpeaker: request.isSpeakerChangeHandoff,
-            allowedNumbers: allowedPreparationNumbers()
-        ) else {
-            return .invalid(
-                baseTextFailure(
-                    raw: raw,
-                    knownSpeakerNames: request.knownSpeakerNames,
-                    isMultiSpeaker: request.isSpeakerChangeHandoff,
-                    allowedNumbers: allowedPreparationNumbers()
-                )
+        let optionSet = PreparationCoachingOptionSet.build(for: request)
+
+        if selection.shouldAbstain {
+            return validatePreparationAbstention(
+                selection: selection,
+                optionSet: optionSet,
+                request: request,
+                now: now
             )
         }
 
-        if raw.shouldAbstain {
-            return .valid(
-                makeAbstentionSuggestion(
-                    task: .preparation,
-                    action: text.action,
-                    rationale: text.rationale,
-                    promptVersion: request.promptVersion,
-                    sectionRevisionID: request.sectionRevisionID,
-                    attemptID: nil,
-                    evidenceVersion: nil,
-                    now: now
-                )
-            )
+        guard !optionSet.mustAbstain else {
+            return .invalid(.invalidAbstentionState)
+        }
+        guard normalizedOptionalID(selection.abstentionReasonID) == nil else {
+            return .invalid(.invalidAbstentionState)
         }
 
-        return buildPreparationSuggestion(raw: raw, request: request, text: text, now: now)
+        return buildPreparationSuggestion(
+            selection: selection,
+            optionSet: optionSet,
+            request: request,
+            now: now
+        )
     }
 
     static func validatePostTake(
-        raw: RawModelCoachingSuggestion,
+        selection: RawModelPostTakeSelection,
         request: PostTakeCoachingRequest,
         now: Date = Date()
     ) -> CoachingValidationVerdict {
-        let allowed = allowedPostTakeNumbers(for: request)
-        guard let text = validateBaseText(
-            raw: raw,
-            knownSpeakerNames: request.knownSpeakerNames,
-            isMultiSpeaker: request.isSpeakerChangeHandoff,
-            allowedNumbers: allowed
-        ) else {
-            return .invalid(
-                baseTextFailure(
-                    raw: raw,
-                    knownSpeakerNames: request.knownSpeakerNames,
-                    isMultiSpeaker: request.isSpeakerChangeHandoff,
-                    allowedNumbers: allowed
-                )
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
+
+        if selection.shouldAbstain {
+            return validatePostTakeAbstention(
+                selection: selection,
+                optionSet: optionSet,
+                request: request,
+                now: now
             )
         }
 
-        let resolvedObservationID: UUID?
-        do {
-            resolvedObservationID = try resolveObservationID(raw.observationID, request: request)
-        } catch {
-            return .invalid(.unknownObservationID)
+        guard !optionSet.mustAbstain else {
+            return .invalid(.invalidAbstentionState)
         }
-
-        if raw.shouldAbstain {
-            guard resolvedObservationID == nil else {
-                return .invalid(.unknownObservationID)
-            }
-            return .valid(
-                makeAbstentionSuggestion(
-                    task: .postTake,
-                    action: text.action,
-                    rationale: text.rationale,
-                    promptVersion: request.promptVersion,
-                    sectionRevisionID: request.sectionRevisionID,
-                    attemptID: request.attemptID,
-                    evidenceVersion: request.evidenceVersion,
-                    now: now
-                )
-            )
+        guard normalizedOptionalID(selection.abstentionReasonID) == nil else {
+            return .invalid(.invalidAbstentionState)
         }
 
         return buildPostTakeSuggestion(
-            raw: raw,
+            selection: selection,
+            optionSet: optionSet,
             request: request,
-            text: text,
-            observationID: resolvedObservationID,
             now: now
         )
     }
 }
 
 private extension CoachingOutputValidator {
-    struct ValidatedText {
-        let action: String
-        let rationale: String
-    }
-
-    static func validateBaseText(
-        raw: RawModelCoachingSuggestion,
-        knownSpeakerNames: [String],
-        isMultiSpeaker: Bool,
-        allowedNumbers: CoachingAllowedNumbers
-    ) -> ValidatedText? {
-        let action = raw.action.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rationale = raw.rationale.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !action.isEmpty, action.count <= maxActionLength,
-              !rationale.isEmpty, rationale.count <= maxRationaleLength else {
+    static func normalizedOptionalID(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.lowercased() == "none" || trimmed.lowercased() == "null" {
             return nil
         }
-        let combined = "\(action) \(rationale)"
-        guard !containsDisallowedClaim(in: combined),
-              !containsUnsupportedSpeakerJudgment(
-                  in: combined,
-                  knownSpeakerNames: knownSpeakerNames,
-                  isMultiSpeaker: isMultiSpeaker
-              ),
-              !containsInventedMeasurement(in: combined, allowedNumbers: allowedNumbers) else {
-            return nil
-        }
-        return ValidatedText(action: action, rationale: rationale)
+        return trimmed
     }
 
-    static func baseTextFailure(
-        raw: RawModelCoachingSuggestion,
-        knownSpeakerNames: [String],
-        isMultiSpeaker: Bool,
-        allowedNumbers: CoachingAllowedNumbers
-    ) -> CoachingValidationFailure {
-        let action = raw.action.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rationale = raw.rationale.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !action.isEmpty, action.count <= maxActionLength,
-              !rationale.isEmpty, rationale.count <= maxRationaleLength else {
-            return .emptyOrInvalidAction
-        }
-        let combined = "\(action) \(rationale)"
-        if containsDisallowedClaim(in: combined) {
-            return .disallowedCoachingClaim
-        }
-        if containsUnsupportedSpeakerJudgment(
-            in: combined,
-            knownSpeakerNames: knownSpeakerNames,
-            isMultiSpeaker: isMultiSpeaker
-        ) {
-            return .unsupportedSpeakerJudgment
-        }
-        return .inventedMeasurement
-    }
-
-    // swiftlint:disable:next function_parameter_count
-    static func makeAbstentionSuggestion(
-        task: CoachingTaskKind,
-        action: String,
-        rationale: String,
-        promptVersion: String,
-        sectionRevisionID: UUID,
-        attemptID: UUID?,
-        evidenceVersion: String?,
+    static func validatePreparationAbstention(
+        selection: RawModelPreparationSelection,
+        optionSet: PreparationCoachingOptionSet,
+        request: PreparationCoachingRequest,
         now: Date
-    ) -> CoachingSuggestion {
-        CoachingSuggestion(
-            task: task,
-            origin: .onDeviceModel,
-            isAbstention: true,
-            techniqueID: nil,
-            techniqueTitle: nil,
-            sourceWork: nil,
-            sourceTimestamp: nil,
-            sourcePassageSummary: nil,
-            exactPhrase: nil,
-            exactPhraseFromHandoff: false,
-            observationID: nil,
-            action: action,
-            rationale: rationale,
-            promptVersion: promptVersion,
-            sectionRevisionID: sectionRevisionID,
-            attemptID: attemptID,
-            evidenceVersion: evidenceVersion,
-            createdAt: now,
-            updatedAt: now
+    ) -> CoachingValidationVerdict {
+        guard normalizedOptionalID(selection.techniqueID) == nil,
+              normalizedOptionalID(selection.passageID) == nil,
+              normalizedOptionalID(selection.actionID) == nil else {
+            return .invalid(.invalidAbstentionState)
+        }
+        guard let reasonID = normalizedOptionalID(selection.abstentionReasonID),
+              let abstention = optionSet.abstentionOptions.first(where: { $0.id == reasonID }) else {
+            return .invalid(.invalidAbstentionState)
+        }
+        return .valid(
+            CoachingSuggestion(
+                task: .preparation,
+                origin: .onDeviceModel,
+                isAbstention: true,
+                techniqueID: nil,
+                techniqueTitle: nil,
+                sourceWork: nil,
+                sourceTimestamp: nil,
+                sourcePassageSummary: nil,
+                exactPhrase: nil,
+                exactPhraseFromHandoff: false,
+                observationID: nil,
+                action: abstention.renderedAction,
+                rationale: abstention.renderedRationale,
+                promptVersion: request.promptVersion,
+                sectionRevisionID: request.sectionRevisionID,
+                createdAt: now,
+                updatedAt: now
+            )
+        )
+    }
+
+    static func validatePostTakeAbstention(
+        selection: RawModelPostTakeSelection,
+        optionSet: PostTakeCoachingOptionSet,
+        request: PostTakeCoachingRequest,
+        now: Date
+    ) -> CoachingValidationVerdict {
+        guard normalizedOptionalID(selection.techniqueID) == nil,
+              normalizedOptionalID(selection.passageID) == nil,
+              normalizedOptionalID(selection.evidenceID) == nil,
+              normalizedOptionalID(selection.actionID) == nil else {
+            return .invalid(.invalidAbstentionState)
+        }
+        guard let reasonID = normalizedOptionalID(selection.abstentionReasonID),
+              let abstention = optionSet.abstentionOptions.first(where: { $0.id == reasonID }) else {
+            return .invalid(.invalidAbstentionState)
+        }
+        return .valid(
+            CoachingSuggestion(
+                task: .postTake,
+                origin: .onDeviceModel,
+                isAbstention: true,
+                techniqueID: nil,
+                techniqueTitle: nil,
+                sourceWork: nil,
+                sourceTimestamp: nil,
+                sourcePassageSummary: nil,
+                exactPhrase: nil,
+                exactPhraseFromHandoff: false,
+                observationID: nil,
+                action: abstention.renderedAction,
+                rationale: abstention.renderedRationale,
+                promptVersion: request.promptVersion,
+                sectionRevisionID: request.sectionRevisionID,
+                attemptID: request.attemptID,
+                evidenceVersion: request.evidenceVersion,
+                createdAt: now,
+                updatedAt: now
+            )
         )
     }
 
     static func buildPreparationSuggestion(
-        raw: RawModelCoachingSuggestion,
+        selection: RawModelPreparationSelection,
+        optionSet: PreparationCoachingOptionSet,
         request: PreparationCoachingRequest,
-        text: ValidatedText,
         now: Date
     ) -> CoachingValidationVerdict {
-        guard let technique = resolveTechnique(
-            id: raw.techniqueID,
-            candidates: request.candidateTechniques,
-            pinnedTechniqueID: request.selectedTechniqueID
-        ) else {
+        guard let techniqueID = normalizedOptionalID(selection.techniqueID),
+              let technique = optionSet.candidateTechniques.first(where: { $0.id == techniqueID }) else {
             return .invalid(.unknownTechniqueID)
         }
-        guard let matchedPhrase = verifyVerbatimPhrase(
-            raw.exactPhrase,
+        guard let passageID = normalizedOptionalID(selection.passageID),
+              let passage = optionSet.passageOptions.first(where: { $0.id == passageID }) else {
+            return .invalid(.unknownPassageID)
+        }
+        guard verifyPassageSource(
+            passage,
             scriptText: request.scriptText,
             handoffCueText: request.handoffCueText
         ) else {
             return .invalid(.alteredOrInventedQuote)
         }
+        guard let actionID = normalizedOptionalID(selection.actionID),
+              let action = optionSet.actionOptions.first(where: { $0.id == actionID }) else {
+            return .invalid(.unknownActionID)
+        }
+        let passageCompatible = passage.fromHandoff
+            ? (action.allowsHandoffPassage && technique.appliesToHandoff)
+            : action.allowsScriptPassage
+        guard action.techniqueID == technique.id, passageCompatible else {
+            return .invalid(.incompatibleSelection)
+        }
+
+        let rationale = optionSet.renderRationale(
+            technique: technique,
+            passage: passage,
+            request: request
+        )
         return .valid(
             CoachingSuggestion(
                 task: .preparation,
@@ -236,11 +215,11 @@ private extension CoachingOutputValidator {
                 sourceWork: technique.sourceWork,
                 sourceTimestamp: technique.sourceTimestamp,
                 sourcePassageSummary: technique.sourcePassageSummary,
-                exactPhrase: matchedPhrase.phrase,
-                exactPhraseFromHandoff: matchedPhrase.fromHandoff,
+                exactPhrase: passage.phrase,
+                exactPhraseFromHandoff: passage.fromHandoff,
                 observationID: nil,
-                action: text.action,
-                rationale: text.rationale,
+                action: action.renderedAction,
+                rationale: rationale,
                 promptVersion: request.promptVersion,
                 sectionRevisionID: request.sectionRevisionID,
                 createdAt: now,
@@ -250,48 +229,141 @@ private extension CoachingOutputValidator {
     }
 
     static func buildPostTakeSuggestion(
-        raw: RawModelCoachingSuggestion,
+        selection: RawModelPostTakeSelection,
+        optionSet: PostTakeCoachingOptionSet,
         request: PostTakeCoachingRequest,
-        text: ValidatedText,
-        observationID: UUID?,
         now: Date
     ) -> CoachingValidationVerdict {
-        guard let technique = resolveTechnique(
-            id: raw.techniqueID,
-            candidates: request.candidateTechniques,
-            pinnedTechniqueID: nil
-        ) else {
+        guard let techniqueID = normalizedOptionalID(selection.techniqueID),
+              let technique = optionSet.candidateTechniques.first(where: { $0.id == techniqueID }) else {
             return .invalid(.unknownTechniqueID)
         }
-        guard let matchedPhrase = verifyVerbatimPhrase(
-            raw.exactPhrase,
+        guard let evidenceID = normalizedOptionalID(selection.evidenceID),
+              let evidence = optionSet.evidenceOptions.first(where: { $0.id == evidenceID }) else {
+            let reason: CoachingValidationFailure = evidenceIDLooksLikeObservation(selection.evidenceID)
+                ? .unknownObservationID
+                : .unknownEvidenceID
+            return .invalid(reason)
+        }
+        guard let passageID = normalizedOptionalID(selection.passageID),
+              let passage = optionSet.passageOptions.first(where: { $0.id == passageID }) else {
+            return .invalid(.unknownPassageID)
+        }
+        guard verifyPassageSource(
+            passage,
             scriptText: request.scriptText,
             handoffCueText: request.handoffCueText
         ) else {
             return .invalid(.alteredOrInventedQuote)
         }
+        guard let actionID = normalizedOptionalID(selection.actionID),
+              let action = optionSet.actionOptions.first(where: { $0.id == actionID }) else {
+            return .invalid(.unknownActionID)
+        }
+
+        guard isPostTakeCombinationValid(
+            technique: technique,
+            evidence: evidence,
+            passage: passage,
+            action: action
+        ) else {
+            return .invalid(.incompatibleSelection)
+        }
+        guard isObservationBacked(evidence: evidence, in: request) else {
+            return .invalid(.unknownObservationID)
+        }
+
         return .valid(
-            CoachingSuggestion(
-                task: .postTake,
-                origin: .onDeviceModel,
-                isAbstention: false,
-                techniqueID: technique.id,
-                techniqueTitle: technique.title,
-                sourceWork: technique.sourceWork,
-                sourceTimestamp: technique.sourceTimestamp,
-                sourcePassageSummary: technique.sourcePassageSummary,
-                exactPhrase: matchedPhrase.phrase,
-                exactPhraseFromHandoff: matchedPhrase.fromHandoff,
-                observationID: observationID,
-                action: text.action,
-                rationale: text.rationale,
-                promptVersion: request.promptVersion,
-                sectionRevisionID: request.sectionRevisionID,
-                attemptID: request.attemptID,
-                evidenceVersion: request.evidenceVersion,
-                createdAt: now,
-                updatedAt: now
+            renderPostTakeSuggestion(
+                technique: technique,
+                evidence: evidence,
+                passage: passage,
+                action: action,
+                optionSet: optionSet,
+                request: request,
+                now: now
             )
         )
+    }
+
+    static func isPostTakeCombinationValid(
+        technique: CoachingTechnique,
+        evidence: CoachingEvidenceOption,
+        passage: CoachingPassageOption,
+        action: CoachingPostTakeActionOption
+    ) -> Bool {
+        evidence.compatiblePassageIDs.contains(passage.id)
+            && evidence.compatibleTechniqueIDs.contains(technique.id)
+            && action.compatibleEvidenceIDs.contains(evidence.id)
+            && action.compatibleTechniqueIDs.contains(technique.id)
+    }
+
+    static func isObservationBacked(
+        evidence: CoachingEvidenceOption,
+        in request: PostTakeCoachingRequest
+    ) -> Bool {
+        guard let obsID = evidence.observationID else { return true }
+        return request.timingAnalysis?.outcome == .completed
+            && request.timingAnalysis?.observations.contains(where: { $0.id == obsID }) == true
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    static func renderPostTakeSuggestion(
+        technique: CoachingTechnique,
+        evidence: CoachingEvidenceOption,
+        passage: CoachingPassageOption,
+        action: CoachingPostTakeActionOption,
+        optionSet: PostTakeCoachingOptionSet,
+        request: PostTakeCoachingRequest,
+        now: Date
+    ) -> CoachingSuggestion {
+        let renderedAction = optionSet.renderAction(
+            template: action.template,
+            evidence: evidence,
+            technique: technique
+        )
+        let renderedRationale = optionSet.renderRationale(
+            evidence: evidence,
+            technique: technique,
+            request: request
+        )
+        return CoachingSuggestion(
+            task: .postTake,
+            origin: .onDeviceModel,
+            isAbstention: false,
+            techniqueID: technique.id,
+            techniqueTitle: technique.title,
+            sourceWork: technique.sourceWork,
+            sourceTimestamp: technique.sourceTimestamp,
+            sourcePassageSummary: technique.sourcePassageSummary,
+            exactPhrase: passage.phrase,
+            exactPhraseFromHandoff: passage.fromHandoff,
+            observationID: evidence.observationID,
+            action: renderedAction,
+            rationale: renderedRationale,
+            promptVersion: request.promptVersion,
+            sectionRevisionID: request.sectionRevisionID,
+            attemptID: request.attemptID,
+            evidenceVersion: request.evidenceVersion,
+            createdAt: now,
+            updatedAt: now
+        )
+    }
+
+    static func verifyPassageSource(
+        _ passage: CoachingPassageOption,
+        scriptText: String,
+        handoffCueText: String?
+    ) -> Bool {
+        if passage.fromHandoff {
+            guard let handoffCueText else { return false }
+            return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(passage.phrase, in: handoffCueText)
+        }
+        return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(passage.phrase, in: scriptText)
+    }
+
+    static func evidenceIDLooksLikeObservation(_ rawID: String?) -> Bool {
+        guard let trimmed = normalizedOptionalID(rawID) else { return false }
+        return trimmed.hasPrefix("obs.") || UUID(uuidString: trimmed) != nil
     }
 }

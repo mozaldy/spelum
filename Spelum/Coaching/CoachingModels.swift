@@ -145,8 +145,13 @@ nonisolated enum CoachingModelAvailability: Codable, Equatable, Hashable, Sendab
 
 nonisolated enum CoachingValidationFailure: String, Codable, Equatable, Hashable, Sendable {
     case unknownTechniqueID
+    case unknownPassageID
     case alteredOrInventedQuote
+    case unknownEvidenceID
     case unknownObservationID
+    case unknownActionID
+    case incompatibleSelection
+    case invalidAbstentionState
     case inventedMeasurement
     case unsupportedSpeakerJudgment
     case disallowedCoachingClaim
@@ -155,8 +160,13 @@ nonisolated enum CoachingValidationFailure: String, Codable, Equatable, Hashable
     var summaryLabel: String {
         switch self {
         case .unknownTechniqueID: "Unrecognized technique ID"
+        case .unknownPassageID: "Unrecognized passage ID"
         case .alteredOrInventedQuote: "Quotation did not match source verbatim"
+        case .unknownEvidenceID: "Referenced evidence ID was absent"
         case .unknownObservationID: "Referenced observation ID was absent"
+        case .unknownActionID: "Unrecognized action option ID"
+        case .incompatibleSelection: "Selected passage, evidence, technique, and action were incompatible"
+        case .invalidAbstentionState: "Invalid abstention selection for available evidence"
         case .inventedMeasurement: "Included an ungrounded timing measurement"
         case .unsupportedSpeakerJudgment: "Attributed timing to a speaker without evidence"
         case .disallowedCoachingClaim: "Included disallowed score or voice/accent judgment"
@@ -204,6 +214,12 @@ nonisolated enum CoachingCueOrigin: String, Codable, Equatable, Hashable, Sendab
     }
 }
 
+nonisolated struct CoachingTechniqueActionOption: Identifiable, Codable, Equatable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let instruction: String
+}
+
 nonisolated struct CoachingTechnique: Identifiable, Codable, Equatable, Hashable, Sendable {
     let id: String
     let title: String
@@ -215,15 +231,50 @@ nonisolated struct CoachingTechnique: Identifiable, Codable, Equatable, Hashable
     let sourcePassageSummary: String
     let deliveryInstruction: String
     let postTakeFocus: String
+    let preparationActionOptions: [CoachingTechniqueActionOption]
+
+    init(
+        id: String,
+        title: String,
+        category: CoachingCategory,
+        applicablePurposes: [SectionPurpose],
+        appliesToHandoff: Bool,
+        sourceWork: String,
+        sourceTimestamp: String,
+        sourcePassageSummary: String,
+        deliveryInstruction: String,
+        postTakeFocus: String,
+        preparationActionOptions: [CoachingTechniqueActionOption] = []
+    ) {
+        self.id = id
+        self.title = title
+        self.category = category
+        self.applicablePurposes = applicablePurposes
+        self.appliesToHandoff = appliesToHandoff
+        self.sourceWork = sourceWork
+        self.sourceTimestamp = sourceTimestamp
+        self.sourcePassageSummary = sourcePassageSummary
+        self.deliveryInstruction = deliveryInstruction
+        self.postTakeFocus = postTakeFocus
+        self.preparationActionOptions = preparationActionOptions
+    }
 }
 
-nonisolated struct RawModelCoachingSuggestion: Codable, Equatable, Hashable, Sendable {
+nonisolated struct RawModelPreparationSelection: Codable, Equatable, Hashable, Sendable {
     let shouldAbstain: Bool
-    let techniqueID: String
-    let exactPhrase: String
-    let observationID: String?
-    let action: String
-    let rationale: String
+    let abstentionReasonID: String?
+    let techniqueID: String?
+    let passageID: String?
+    let actionID: String?
+}
+
+nonisolated struct RawModelPostTakeSelection: Codable, Equatable, Hashable, Sendable {
+    let shouldAbstain: Bool
+    let abstentionReasonID: String?
+    let techniqueID: String?
+    let passageID: String?
+    let evidenceID: String?
+    let actionID: String?
 }
 
 nonisolated struct CoachingSuggestion: Identifiable, Codable, Equatable, Hashable, Sendable {

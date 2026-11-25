@@ -12,6 +12,7 @@ nonisolated struct PreparationCoachingRequest: Equatable, Hashable, Sendable {
     let purpose: SectionPurpose
     let handoffCueText: String?
     let isSpeakerChangeHandoff: Bool
+    let isMultiSpeakerTalk: Bool
     let knownSpeakerNames: [String]
     let selectedTechniqueID: String?
     let candidateTechniques: [CoachingTechnique]
@@ -28,6 +29,7 @@ nonisolated struct PreparationCoachingRequest: Equatable, Hashable, Sendable {
         purpose: SectionPurpose,
         handoffCueText: String?,
         isSpeakerChangeHandoff: Bool,
+        isMultiSpeakerTalk: Bool? = nil,
         knownSpeakerNames: [String] = [],
         selectedTechniqueID: String? = nil,
         candidateTechniques: [CoachingTechnique],
@@ -43,6 +45,7 @@ nonisolated struct PreparationCoachingRequest: Equatable, Hashable, Sendable {
         self.purpose = purpose
         self.handoffCueText = handoffCueText
         self.isSpeakerChangeHandoff = isSpeakerChangeHandoff
+        self.isMultiSpeakerTalk = isMultiSpeakerTalk ?? (isSpeakerChangeHandoff || knownSpeakerNames.count > 1)
         self.knownSpeakerNames = knownSpeakerNames
         self.selectedTechniqueID = selectedTechniqueID
         self.candidateTechniques = candidateTechniques
@@ -71,7 +74,9 @@ nonisolated struct PreparationCoachingRequest: Equatable, Hashable, Sendable {
             purpose.rawValue,
             handoffCueText ?? "",
             isSpeakerChangeHandoff ? "1" : "0",
+            isMultiSpeakerTalk ? "1" : "0",
             effectiveTechniqueKey,
+            candidateTechniques.map(\.id).joined(separator: ","),
             promptVersion
         ].joined(separator: "\u{1E}")
         return CoachingFingerprint.sha256Hex(components)
@@ -90,6 +95,7 @@ nonisolated struct PostTakeCoachingRequest: Equatable, Hashable, Sendable {
     let purpose: SectionPurpose
     let handoffCueText: String?
     let isSpeakerChangeHandoff: Bool
+    let isMultiSpeakerTalk: Bool
     let knownSpeakerNames: [String]
     let attemptStatus: AttemptStatus
     let practiceMode: PracticeMode
@@ -112,6 +118,7 @@ nonisolated struct PostTakeCoachingRequest: Equatable, Hashable, Sendable {
         purpose: SectionPurpose,
         handoffCueText: String?,
         isSpeakerChangeHandoff: Bool,
+        isMultiSpeakerTalk: Bool? = nil,
         knownSpeakerNames: [String] = [],
         attemptStatus: AttemptStatus,
         practiceMode: PracticeMode,
@@ -133,6 +140,7 @@ nonisolated struct PostTakeCoachingRequest: Equatable, Hashable, Sendable {
         self.purpose = purpose
         self.handoffCueText = handoffCueText
         self.isSpeakerChangeHandoff = isSpeakerChangeHandoff
+        self.isMultiSpeakerTalk = isMultiSpeakerTalk ?? (isSpeakerChangeHandoff || knownSpeakerNames.count > 1)
         self.knownSpeakerNames = knownSpeakerNames
         self.attemptStatus = attemptStatus
         self.practiceMode = practiceMode
@@ -155,13 +163,18 @@ nonisolated struct PostTakeCoachingRequest: Equatable, Hashable, Sendable {
         }.joined(separator: ",")
         let analysisPart: String
         if let analysis = timingAnalysis {
-            let obsIDs = analysis.observations.map { $0.id.uuidString.lowercased() }.joined(separator: ",")
+            let obsSummary = analysis.observations.map { obs in
+                let gap = obs.gapDuration.map { String(format: "%.2f", $0) } ?? ""
+                return "\(obs.id.uuidString.lowercased()):\(obs.kind.rawValue):\(gap):\(obs.matchedPhrase ?? "")"
+            }.joined(separator: ",")
             let noteReasons = analysis.ambiguousNotes.map(\.reason.rawValue).joined(separator: ",")
+            let wpmPart = analysis.estimatedWordsPerMinute.map { String(format: "%.1f", $0) } ?? ""
             analysisPart = [
                 analysis.analysisID.uuidString.lowercased(),
                 String(analysis.analysisVersion),
                 analysis.outcome.rawValue,
-                obsIDs,
+                wpmPart,
+                obsSummary,
                 noteReasons
             ].joined(separator: "|")
         } else {
@@ -169,12 +182,19 @@ nonisolated struct PostTakeCoachingRequest: Equatable, Hashable, Sendable {
         }
         let raw = [
             sectionRevisionID.uuidString.lowercased(),
+            scriptText,
+            exactPhrase ?? "",
+            handoffCueText ?? "",
+            isSpeakerChangeHandoff ? "1" : "0",
+            isMultiSpeakerTalk ? "1" : "0",
             attemptStatus.rawValue,
             practiceMode.rawValue,
             String(format: "%.2f", playableDuration),
             String(revealCount),
             markerPart,
-            analysisPart
+            analysisPart,
+            candidateTechniques.map(\.id).joined(separator: ","),
+            promptVersion
         ].joined(separator: "\u{1E}")
         return CoachingFingerprint.sha256Hex(raw)
     }

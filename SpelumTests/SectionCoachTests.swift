@@ -59,20 +59,21 @@ struct SectionCoachTests {
         #expect(provider.preparationCallCount == 0)
     }
 
-    @Test("Invented quotation fails validation and reverts to safe authored cue")
-    func inventedQuotationRevertsToAuthoredCue() async throws {
+    @Test("Unknown passage ID fails bounded preparation validation and reverts to safe authored cue")
+    func unknownPassageIDRevertsToAuthoredCue() async throws {
         let request = CoachingTestFixtures.makeSamplePreparationRequest()
-        let firstTechnique = try #require(request.candidateTechniques.first)
+        let optionSet = PreparationCoachingOptionSet.build(for: request)
+        let firstTechnique = try #require(optionSet.candidateTechniques.first)
+        let firstAction = try #require(optionSet.actionOptions.first { $0.techniqueID == firstTechnique.id })
         let provider = StubCoachingModelProvider(
             availabilityState: .available,
             preparationHandler: { _ in
-                RawModelCoachingSuggestion(
+                RawModelPreparationSelection(
                     shouldAbstain: false,
+                    abstentionReasonID: nil,
                     techniqueID: firstTechnique.id,
-                    exactPhrase: "Today we are launching Lumera Pro Max forever!",
-                    observationID: nil,
-                    action: "Pause briefly before delivering the product name.",
-                    rationale: "Sets up the reveal."
+                    passageID: "passage.invented-quote",
+                    actionID: firstAction.id
                 )
             }
         )
@@ -81,8 +82,7 @@ struct SectionCoachTests {
         let result = await service.generatePreparationCue(request: request, mode: .onDeviceModel)
 
         #expect(result.origin == .authoredFallback)
-        #expect(result.fallbackReason == .validationFailed(.alteredOrInventedQuote))
-        #expect(result.exactPhrase != "Today we are launching Lumera Pro Max forever!")
+        #expect(result.fallbackReason == .validationFailed(.unknownPassageID))
         if let phrase = result.exactPhrase {
             #expect(request.scriptText.contains(phrase) || (request.handoffCueText?.contains(phrase) == true))
         }
@@ -91,19 +91,22 @@ struct SectionCoachTests {
     @Test("Absent or invented observation ID fails post-take validation and reverts to safe authored cue")
     func absentObservationIDRevertsToAuthoredCue() async throws {
         let request = CoachingTestFixtures.makeSamplePostTakeRequest(withObservation: true)
-        let firstTechnique = try #require(request.candidateTechniques.first)
-        let nonexistentObservationID = UUID().uuidString
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
+        let firstTechnique = try #require(optionSet.candidateTechniques.first)
+        let firstPassage = try #require(optionSet.passageOptions.first)
+        let firstAction = try #require(optionSet.actionOptions.first)
+        let nonexistentObservationID = "obs.\(UUID().uuidString.lowercased())"
 
         let provider = StubCoachingModelProvider(
             availabilityState: .available,
             postTakeHandler: { _ in
-                RawModelCoachingSuggestion(
+                RawModelPostTakeSelection(
                     shouldAbstain: false,
+                    abstentionReasonID: nil,
                     techniqueID: firstTechnique.id,
-                    exactPhrase: "Today we are introducing Lumera.",
-                    observationID: nonexistentObservationID,
-                    action: "Replay the beat before the reveal and test a calmer landing.",
-                    rationale: "Grounded in the pause before the headline."
+                    passageID: firstPassage.id,
+                    evidenceID: nonexistentObservationID,
+                    actionID: firstAction.id
                 )
             }
         )
@@ -113,76 +116,94 @@ struct SectionCoachTests {
 
         #expect(result.origin == .authoredFallback)
         #expect(result.fallbackReason == .validationFailed(.unknownObservationID))
-        #expect(result.observationID != UUID(uuidString: nonexistentObservationID))
+        #expect(result.observationID?.uuidString.lowercased() != nonexistentObservationID)
     }
 
-    @Test("Invented measurements, performance scores, and unsupported speaker judgments fail validation")
-    func unsafeModelOutputsFailValidation() async throws {
+    @Test("Incompatible technique, passage, evidence, and action combinations fail bounded validation")
+    func incompatibleBoundedSelectionsFailValidation() throws {
         let request = CoachingTestFixtures.makeSamplePostTakeRequest(withObservation: true)
-        let technique = try #require(request.candidateTechniques.first)
-        let validObsID = try #require(request.timingAnalysis?.observations.first?.id)
-
-        let inventedMeasurement = RawModelCoachingSuggestion(
-            shouldAbstain: false,
-            techniqueID: technique.id,
-            exactPhrase: "Today we are introducing Lumera.",
-            observationID: validObsID.uuidString,
-            action: "You spoke at 210 WPM, so slow down before the product name.",
-            rationale: "210 WPM is too fast."
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
+        let technique = try #require(optionSet.candidateTechniques.first)
+        let gapEvidence = try #require(optionSet.evidenceOptions.first { $0.observationID != nil })
+        let validAction = try #require(
+            optionSet.actionOptions.first { $0.compatibleEvidenceIDs.contains(gapEvidence.id) }
         )
-        let measurementVerdict = CoachingOutputValidator.validatePostTake(
-            raw: inventedMeasurement,
+
+        // Unrelated passage ("Thank you, Sam." is not adjacent to the gap at "rebuilt our recorder -> Lumera")
+        let samPassage = try #require(optionSet.passageOptions.first { $0.phrase == "Thank you, Sam." })
+        let unrelatedPairing = RawModelPostTakeSelection(
+            shouldAbstain: false,
+            abstentionReasonID: nil,
+            techniqueID: technique.id,
+            passageID: samPassage.id,
+            evidenceID: gapEvidence.id,
+            actionID: validAction.id
+        )
+        let unrelatedVerdict = CoachingOutputValidator.validatePostTake(
+            selection: unrelatedPairing,
             request: request
         )
-        #expect(measurementVerdict.failureReason == .inventedMeasurement)
+        #expect(unrelatedVerdict.failureReason == .incompatibleSelection)
 
-        let speakerBlame = RawModelCoachingSuggestion(
+        // Unknown action ID
+        let matchingPassageID = try #require(gapEvidence.compatiblePassageIDs.first)
+        let badAction = RawModelPostTakeSelection(
             shouldAbstain: false,
+            abstentionReasonID: nil,
             techniqueID: technique.id,
-            exactPhrase: "Today we are introducing Lumera.",
-            observationID: validObsID.uuidString,
-            action: "Ask Sam to finish sooner because Sam paused too long before your line.",
-            rationale: "Sam's pause delayed the handoff."
+            passageID: matchingPassageID,
+            evidenceID: gapEvidence.id,
+            actionID: "post.invented.action"
         )
-        let speakerVerdict = CoachingOutputValidator.validatePostTake(
-            raw: speakerBlame,
-            request: request
+        #expect(
+            CoachingOutputValidator.validatePostTake(selection: badAction, request: request).failureReason
+                == .unknownActionID
         )
-        #expect(speakerVerdict.failureReason == .unsupportedSpeakerJudgment)
 
-        let disallowedScore = RawModelCoachingSuggestion(
+        // Unknown technique ID
+        let badTechnique = RawModelPostTakeSelection(
             shouldAbstain: false,
-            techniqueID: technique.id,
-            exactPhrase: "Today we are introducing Lumera.",
-            observationID: validObsID.uuidString,
-            action: "Overall score 8/10; work on your accent and sound more like Steve Jobs.",
-            rationale: "Pronunciation sounded nervous."
+            abstentionReasonID: nil,
+            techniqueID: "nonexistent.tech",
+            passageID: matchingPassageID,
+            evidenceID: gapEvidence.id,
+            actionID: validAction.id
         )
-        let disallowedVerdict = CoachingOutputValidator.validatePostTake(
-            raw: disallowedScore,
-            request: request
+        #expect(
+            CoachingOutputValidator.validatePostTake(selection: badTechnique, request: request).failureReason
+                == .unknownTechniqueID
         )
-        #expect(disallowedVerdict.failureReason == .disallowedCoachingClaim)
     }
 
-    @Test("Valid grounded post-take model suggestion and valid abstention pass validation")
+    @Test("Valid bounded post-take selection and valid abstention pass validation and render deterministically")
     func validGroundedModelSuggestionAndAbstentionPass() async throws {
         let request = CoachingTestFixtures.makeSamplePostTakeRequest(withObservation: true)
-        let technique = try #require(request.candidateTechniques.first)
-        let validObsID = try #require(request.timingAnalysis?.observations.first?.id)
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
+        let technique = try #require(optionSet.candidateTechniques.first)
+        let gapEvidence = try #require(optionSet.evidenceOptions.first { $0.observationID != nil })
+        let validObsID = try #require(gapEvidence.observationID)
+        let matchingPassage = try #require(
+            optionSet.passageOptions.first { gapEvidence.compatiblePassageIDs.contains($0.id) }
+        )
+        let validAction = try #require(
+            optionSet.actionOptions.first {
+                $0.compatibleEvidenceIDs.contains(gapEvidence.id)
+                    && $0.compatibleTechniqueIDs.contains(technique.id)
+            }
+        )
 
-        let validRaw = RawModelCoachingSuggestion(
+        let validSelection = RawModelPostTakeSelection(
             shouldAbstain: false,
+            abstentionReasonID: nil,
             techniqueID: technique.id,
-            exactPhrase: "Today we are introducing Lumera.",
-            observationID: validObsID.uuidString,
-            action: "Replay from the 0.9s pause and try landing the reveal without rushing.",
-            rationale: "The bounded pause sits directly before your marked exact phrase."
+            passageID: matchingPassage.id,
+            evidenceID: gapEvidence.id,
+            actionID: validAction.id
         )
         let service = SectionCoachService(
             modelProvider: StubCoachingModelProvider(
                 availabilityState: .available,
-                postTakeHandler: { _ in validRaw }
+                postTakeHandler: { _ in validSelection }
             )
         )
         let result = await service.generatePostTakeCue(request: request, mode: .onDeviceModel)
@@ -190,20 +211,23 @@ struct SectionCoachTests {
         #expect(result.origin == .onDeviceModel)
         #expect(!result.isAbstention)
         #expect(result.techniqueID == technique.id)
-        #expect(result.exactPhrase == "Today we are introducing Lumera.")
+        #expect(result.exactPhrase == matchingPassage.phrase)
         #expect(result.observationID == validObsID)
+        #expect(result.action.contains("0.9s"))
+        #expect(!result.rationale.lowercased().contains("sam"))
 
+        let abstainOption = try #require(optionSet.abstentionOptions.first)
         let abstainService = SectionCoachService(
             modelProvider: StubCoachingModelProvider(
                 availabilityState: .available,
                 postTakeHandler: { _ in
-                    RawModelCoachingSuggestion(
+                    RawModelPostTakeSelection(
                         shouldAbstain: true,
-                        techniqueID: "",
-                        exactPhrase: "",
-                        observationID: nil,
-                        action: "No change needed on this take — replay the exact phrase to confirm.",
-                        rationale: "Delivery was clean with 0 reveals and aligned timing."
+                        abstentionReasonID: abstainOption.id,
+                        techniqueID: nil,
+                        passageID: nil,
+                        evidenceID: nil,
+                        actionID: nil
                     )
                 }
             )

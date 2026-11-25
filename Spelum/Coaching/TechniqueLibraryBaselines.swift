@@ -7,6 +7,27 @@ extension TechniqueLibrary {
         fallbackReason: CoachingFallbackReason? = nil,
         now: Date = Date()
     ) -> CoachingSuggestion {
+        let optionSet = PreparationCoachingOptionSet.build(for: request)
+        if optionSet.mustAbstain, let abstention = optionSet.abstentionOptions.first {
+            return makePreparationAbstention(
+                request: request,
+                origin: origin,
+                fallbackReason: fallbackReason,
+                abstention: abstention,
+                now: now
+            )
+        }
+        if PreparationCoachingOptionSet.isMinimalClosingLine(request),
+           let abstention = optionSet.abstentionOptions.first(where: { $0.id == "abstain.prep.minimal-signoff" }) {
+            return makePreparationAbstention(
+                request: request,
+                origin: origin,
+                fallbackReason: fallbackReason,
+                abstention: abstention,
+                now: now
+            )
+        }
+
         let technique = selectAuthoredPreparationTechnique(for: request)
         let anchor = selectVerbatimPhrase(
             scriptText: request.scriptText,
@@ -33,6 +54,37 @@ extension TechniqueLibrary {
             observationID: nil,
             action: action,
             rationale: rationale,
+            promptVersion: request.promptVersion,
+            sectionRevisionID: request.sectionRevisionID,
+            attemptID: nil,
+            evidenceVersion: nil,
+            createdAt: now,
+            updatedAt: now
+        )
+    }
+
+    private static func makePreparationAbstention(
+        request: PreparationCoachingRequest,
+        origin: CoachingCueOrigin,
+        fallbackReason: CoachingFallbackReason?,
+        abstention: CoachingAbstentionOption,
+        now: Date
+    ) -> CoachingSuggestion {
+        CoachingSuggestion(
+            task: .preparation,
+            origin: origin,
+            fallbackReason: fallbackReason,
+            isAbstention: true,
+            techniqueID: nil,
+            techniqueTitle: nil,
+            sourceWork: nil,
+            sourceTimestamp: nil,
+            sourcePassageSummary: nil,
+            exactPhrase: nil,
+            exactPhraseFromHandoff: false,
+            observationID: nil,
+            action: abstention.renderedAction,
+            rationale: abstention.renderedRationale,
             promptVersion: request.promptVersion,
             sectionRevisionID: request.sectionRevisionID,
             attemptID: nil,
@@ -75,19 +127,19 @@ extension TechniqueLibrary {
     ) -> PhraseAnchor {
         if let exact = exactPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
            !exact.isEmpty,
-           scriptText.contains(exact) {
+           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(exact, in: scriptText) {
             return PhraseAnchor(phrase: exact, fromHandoff: false)
         }
         if preferHandoff,
            let handoff = handoffCueText?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !handoff.isEmpty {
+           !handoff.isEmpty,
+           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(handoff, in: handoff) {
             return PhraseAnchor(phrase: handoff, fromHandoff: true)
         }
-        if let sentence = firstSpokenSentence(in: scriptText) {
+        if let sentence = CoachingPassageExtractor.firstSpokenSentence(in: scriptText) {
             return PhraseAnchor(phrase: sentence, fromHandoff: false)
         }
-        let trimmed = scriptText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return PhraseAnchor(phrase: trimmed.isEmpty ? nil : trimmed, fromHandoff: false)
+        return PhraseAnchor(phrase: nil, fromHandoff: false)
     }
 }
 
@@ -154,22 +206,6 @@ private extension TechniqueLibrary {
             return technique(withID: "close.short-final-line") ?? fallback
         }
         return technique(withID: "close.lineup-identity") ?? fallback
-    }
-
-    static func firstSpokenSentence(in text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let separators = CharacterSet(charactersIn: ".!?\n")
-        if let range = trimmed.rangeOfCharacter(from: separators) {
-            let candidateEnd = trimmed[range.lowerBound] == "\n"
-                ? range.lowerBound
-                : trimmed.index(after: range.lowerBound)
-            let candidate = String(trimmed[..<candidateEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if candidate.count >= 4 && !candidate.hasPrefix("[") {
-                return candidate
-            }
-        }
-        return trimmed
     }
 
     static func buildAuthoredPreparationRationale(

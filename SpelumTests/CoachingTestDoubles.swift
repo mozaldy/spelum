@@ -116,16 +116,19 @@ actor CoachingAsyncGate {
 }
 
 final class StubCoachingModelProvider: CoachingModelProviding, @unchecked Sendable {
+    typealias PreparationHandler = @Sendable (PreparationCoachingRequest) async throws -> RawModelPreparationSelection
+    typealias PostTakeHandler = @Sendable (PostTakeCoachingRequest) async throws -> RawModelPostTakeSelection
+
     let availabilityState: CoachingModelAvailability
-    let preparationHandler: (@Sendable (PreparationCoachingRequest) async throws -> RawModelCoachingSuggestion)?
-    let postTakeHandler: (@Sendable (PostTakeCoachingRequest) async throws -> RawModelCoachingSuggestion)?
+    let preparationHandler: PreparationHandler?
+    let postTakeHandler: PostTakeHandler?
     private(set) var preparationCallCount = 0
     private(set) var postTakeCallCount = 0
 
     init(
         availabilityState: CoachingModelAvailability,
-        preparationHandler: (@Sendable (PreparationCoachingRequest) async throws -> RawModelCoachingSuggestion)? = nil,
-        postTakeHandler: (@Sendable (PostTakeCoachingRequest) async throws -> RawModelCoachingSuggestion)? = nil
+        preparationHandler: PreparationHandler? = nil,
+        postTakeHandler: PostTakeHandler? = nil
     ) {
         self.availabilityState = availabilityState
         self.preparationHandler = preparationHandler
@@ -136,34 +139,69 @@ final class StubCoachingModelProvider: CoachingModelProviding, @unchecked Sendab
         availabilityState
     }
 
-    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelCoachingSuggestion {
+    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelPreparationSelection {
         preparationCallCount += 1
         if let preparationHandler {
             return try await preparationHandler(request)
         }
-        let tech = request.candidateTechniques.first?.id ?? "reveal.three-part-resolution"
-        return RawModelCoachingSuggestion(
-            shouldAbstain: false,
-            techniqueID: tech,
-            exactPhrase: request.exactPhrase ?? request.scriptText,
-            observationID: nil,
-            action: "Try one calm beat before the highlighted line.",
-            rationale: "Fits the section."
-        )
+        return Self.defaultPreparationSelection(for: request)
     }
 
-    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelCoachingSuggestion {
+    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelPostTakeSelection {
         postTakeCallCount += 1
         if let postTakeHandler {
             return try await postTakeHandler(request)
         }
-        return RawModelCoachingSuggestion(
+        return Self.defaultPostTakeSelection(for: request)
+    }
+
+    static func defaultPreparationSelection(
+        for request: PreparationCoachingRequest
+    ) -> RawModelPreparationSelection {
+        let optionSet = PreparationCoachingOptionSet.build(for: request)
+        if optionSet.mustAbstain, let abstention = optionSet.abstentionOptions.first {
+            return RawModelPreparationSelection(
+                shouldAbstain: true,
+                abstentionReasonID: abstention.id,
+                techniqueID: nil,
+                passageID: nil,
+                actionID: nil
+            )
+        }
+        let tech = optionSet.candidateTechniques.first?.id ?? "reveal.three-part-resolution"
+        let passage = optionSet.passageOptions.first(where: { !$0.fromHandoff })?.id
+            ?? optionSet.passageOptions.first?.id
+        let action = optionSet.actionOptions.first(where: { $0.techniqueID == tech })?.id
+        return RawModelPreparationSelection(
+            shouldAbstain: false,
+            abstentionReasonID: nil,
+            techniqueID: tech,
+            passageID: passage,
+            actionID: action
+        )
+    }
+
+    static func defaultPostTakeSelection(
+        for request: PostTakeCoachingRequest
+    ) -> RawModelPostTakeSelection {
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
+        if let abstention = optionSet.abstentionOptions.first {
+            return RawModelPostTakeSelection(
+                shouldAbstain: true,
+                abstentionReasonID: abstention.id,
+                techniqueID: nil,
+                passageID: nil,
+                evidenceID: nil,
+                actionID: nil
+            )
+        }
+        return RawModelPostTakeSelection(
             shouldAbstain: true,
-            techniqueID: "",
-            exactPhrase: "",
-            observationID: nil,
-            action: "No change needed — replay to confirm.",
-            rationale: "Clean delivery."
+            abstentionReasonID: "abstain.post.clean-take",
+            techniqueID: nil,
+            passageID: nil,
+            evidenceID: nil,
+            actionID: nil
         )
     }
 }

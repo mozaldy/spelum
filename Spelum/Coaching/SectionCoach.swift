@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 nonisolated final class SectionCoachService: Sendable {
-    static let preparationPromptVersion = "prep-v1"
-    static let postTakePromptVersion = "review-v1"
+    static let preparationPromptVersion = "prep-v2"
+    static let postTakePromptVersion = "review-v2"
 
     let modelProvider: any CoachingModelProviding
     let policy: CoachingFeaturePolicy
@@ -46,16 +46,16 @@ nonisolated final class SectionCoachService: Sendable {
         }
 
         do {
-            let raw = try await modelProvider.generatePreparation(request)
+            let selection = try await modelProvider.generatePreparation(request)
             let verdict = CoachingOutputValidator.validatePreparation(
-                raw: raw,
+                selection: selection,
                 request: request,
                 now: now
             )
             if let valid = verdict.suggestion {
                 return valid
             }
-            let failure = verdict.failureReason ?? .emptyOrInvalidAction
+            let failure = verdict.failureReason ?? .incompatibleSelection
             return TechniqueLibrary.authoredPreparationSuggestion(
                 for: request,
                 origin: .authoredFallback,
@@ -98,16 +98,16 @@ nonisolated final class SectionCoachService: Sendable {
         }
 
         do {
-            let raw = try await modelProvider.generatePostTake(request)
+            let selection = try await modelProvider.generatePostTake(request)
             let verdict = CoachingOutputValidator.validatePostTake(
-                raw: raw,
+                selection: selection,
                 request: request,
                 now: now
             )
             if let valid = verdict.suggestion {
                 return valid
             }
-            let failure = verdict.failureReason ?? .emptyOrInvalidAction
+            let failure = verdict.failureReason ?? .incompatibleSelection
             return TechniqueLibrary.authoredPostTakeSuggestion(
                 for: request,
                 origin: .authoredFallback,
@@ -136,6 +136,7 @@ nonisolated final class SectionCoachService: Sendable {
         let handoffText = handoff?.effectiveCueText
         let hasHandoff = !(handoffText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         let isSpeakerChange = handoff?.isSpeakerChange ?? false
+        let isMultiSpeaker = (handoff?.isSingleSpeakerTalk == false) || knownSpeakerNames.count > 1
         let candidates = TechniqueLibrary.candidateTechniques(
             for: section.purpose,
             hasHandoff: hasHandoff
@@ -151,6 +152,7 @@ nonisolated final class SectionCoachService: Sendable {
             purpose: section.purpose,
             handoffCueText: handoffText,
             isSpeakerChangeHandoff: isSpeakerChange,
+            isMultiSpeakerTalk: isMultiSpeaker,
             knownSpeakerNames: knownSpeakerNames,
             selectedTechniqueID: selectedTechniqueID,
             candidateTechniques: candidates,
@@ -169,7 +171,8 @@ nonisolated final class SectionCoachService: Sendable {
     ) -> PostTakeCoachingRequest {
         let handoffText = handoff?.effectiveCueText
         let hasHandoff = !(handoffText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let isSpeakerChange = (handoff?.isSpeakerChange == true) || (handoff?.isSingleSpeakerTalk == false)
+        let isSpeakerChange = handoff?.isSpeakerChange ?? false
+        let isMultiSpeaker = (handoff?.isSingleSpeakerTalk == false) || knownSpeakerNames.count > 1
         let candidates = TechniqueLibrary.candidateTechniques(
             for: section.purpose,
             hasHandoff: hasHandoff
@@ -186,6 +189,7 @@ nonisolated final class SectionCoachService: Sendable {
             purpose: section.purpose,
             handoffCueText: handoffText,
             isSpeakerChangeHandoff: isSpeakerChange,
+            isMultiSpeakerTalk: isMultiSpeaker,
             knownSpeakerNames: knownSpeakerNames,
             attemptStatus: attempt.status,
             practiceMode: attempt.practiceMode,

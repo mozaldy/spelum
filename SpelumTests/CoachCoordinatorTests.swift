@@ -82,21 +82,11 @@ struct PreparationCoachCoordinatorTests {
             talkRevisionID: seeded.talkRevision.id,
             handoff: nil
         )
-        let candidateTech = try #require(requestV1.candidateTechniques.first)
-        let v1Phrase = seeded.section.exactPhrase ?? seeded.section.text
-
         let provider = StubCoachingModelProvider(
             availabilityState: .available,
-            preparationHandler: { _ in
+            preparationHandler: { req in
                 await gate.wait()
-                return RawModelCoachingSuggestion(
-                    shouldAbstain: false,
-                    techniqueID: candidateTech.id,
-                    exactPhrase: v1Phrase,
-                    observationID: nil,
-                    action: "Stale model suggestion from v1.",
-                    rationale: "Fits v1."
-                )
+                return StubCoachingModelProvider.defaultPreparationSelection(for: req)
             }
         )
         let coordinator = PreparationCoachCoordinator(
@@ -132,7 +122,7 @@ struct PreparationCoachCoordinatorTests {
 
         #expect(provider.preparationCallCount == 1)
         #expect(coordinator.currentCue?.sectionRevisionID == updatedSection.revisionID)
-        #expect(coordinator.currentCue?.displayedAction != "Stale model suggestion from v1.")
+        #expect(coordinator.currentCue?.origin == .authoredBaseline)
     }
 }
 
@@ -202,16 +192,9 @@ struct CoachCoordinatorTests {
         let gate = CoachingAsyncGate()
         let provider = StubCoachingModelProvider(
             availabilityState: .available,
-            postTakeHandler: { _ in
+            postTakeHandler: { req in
                 await gate.wait()
-                return RawModelCoachingSuggestion(
-                    shouldAbstain: true,
-                    techniqueID: "",
-                    exactPhrase: "",
-                    observationID: nil,
-                    action: "Late post-take suggestion after deletion.",
-                    rationale: "Should be discarded."
-                )
+                return StubCoachingModelProvider.defaultPostTakeSelection(for: req)
             }
         )
         let coordinator = PostTakeCoachCoordinator(

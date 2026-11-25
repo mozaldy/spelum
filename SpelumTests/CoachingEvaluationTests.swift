@@ -43,9 +43,12 @@ struct CoachingEvaluationTests {
         for prepCase in dataset.preparationCases {
             let req = prepCase.makeRequest()
             let cue = TechniqueLibrary.authoredPreparationSuggestion(for: req)
-            #expect(!cue.isAbstention)
-            let techID = try #require(cue.techniqueID)
-            #expect(TechniqueLibrary.technique(withID: techID) != nil)
+            let expectsAbstain = prepCase.expectsAbstention || prepCase.tags.contains("abstainCandidate")
+            #expect(cue.isAbstention == expectsAbstain)
+            if !cue.isAbstention {
+                let techID = try #require(cue.techniqueID)
+                #expect(TechniqueLibrary.technique(withID: techID) != nil)
+            }
             #expect(!cue.action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if let phrase = cue.exactPhrase, !phrase.isEmpty {
                 let inScript = req.scriptText.contains(phrase)
@@ -84,16 +87,7 @@ struct CoachingEvaluationTests {
         let provider = StubCoachingModelProvider(
             availabilityState: .available,
             preparationHandler: { req in
-                let tech = req.candidateTechniques.first?.id ?? "reveal.three-part-resolution"
-                let phrase = req.exactPhrase ?? req.scriptText
-                return RawModelCoachingSuggestion(
-                    shouldAbstain: false,
-                    techniqueID: tech,
-                    exactPhrase: phrase,
-                    observationID: nil,
-                    action: "Deliver the highlighted phrase after one calm beat.",
-                    rationale: "Matches the section purpose."
-                )
+                StubCoachingModelProvider.defaultPreparationSelection(for: req)
             }
         )
         let runner = CoachingEvaluationRunner(

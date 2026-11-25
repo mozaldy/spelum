@@ -66,6 +66,7 @@ private extension TechniqueLibrary {
             purpose: request.purpose,
             handoffCueText: request.handoffCueText,
             isSpeakerChangeHandoff: request.isSpeakerChangeHandoff,
+            isMultiSpeakerTalk: request.isMultiSpeakerTalk,
             knownSpeakerNames: request.knownSpeakerNames,
             selectedTechniqueID: nil,
             candidateTechniques: request.candidateTechniques,
@@ -80,54 +81,28 @@ private extension TechniqueLibrary {
         fallbackReason: CoachingFallbackReason?,
         now: Date
     ) -> CoachingSuggestion? {
-        let pair: (action: String, rationale: String)?
-        if request.attemptStatus == .silentCompleted || request.playableDuration <= 0 {
-            pair = (
-                "No timing cue offered for silent recall. Record an audio take when ready to review delivery.",
-                "Silent recall captures time and script reveals only, without audio timing evidence."
+        if let mandatory = PostTakeCoachingOptionSet.mandatoryAbstentionOption(for: request) {
+            return makeAbstention(
+                request: request,
+                origin: origin,
+                fallbackReason: fallbackReason,
+                action: mandatory.renderedAction,
+                rationale: mandatory.renderedRationale,
+                now: now
             )
-        } else if request.attemptStatus == .interrupted && (request.timingAnalysis?.observations.isEmpty ?? true) {
-            pair = (
-                "Replay your partial audio or retry the section before picking a delivery adjustment.",
-                "This take was interrupted before full timing evidence was available."
-            )
-        } else if shouldAbstainForUncertainty(request: request) {
-            pair = (
-                "Withholding an automated timing cue — replay the take and add a manual marker to adjust.",
-                "Speech alignment was uncertain, silent, or skipped, so playback and marking are more reliable."
-            )
-        } else if shouldAbstainForCleanTake(request: request) {
-            pair = (
-                "No change needed right now — replay the aligned passage once to confirm it sounds right.",
-                "This take finished cleanly with 0 reveals and aligned phrasing, so withholding a correction fits."
-            )
-        } else {
-            pair = nil
         }
-        guard let pair else { return nil }
-        return makeAbstention(
-            request: request,
-            origin: origin,
-            fallbackReason: fallbackReason,
-            action: pair.action,
-            rationale: pair.rationale,
-            now: now
-        )
-    }
-
-    static func shouldAbstainForUncertainty(request: PostTakeCoachingRequest) -> Bool {
-        let observations = request.timingAnalysis?.observations ?? []
-        let ambiguousNotes = request.timingAnalysis?.ambiguousNotes ?? []
-        let hasBlockingAmbiguity = ambiguousNotes.contains { note in
-            switch note.reason {
-            case .emptyTranscript, .overlappingRanges, .incompleteTimingCoverage,
-                 .repeatedPhrase, .paraphrasedOrMissingWords:
-                true
-            case .stageDirectionSilence, .multiSpeakerBoundary:
-                false
-            }
+        if shouldAbstainForCleanTake(request: request) {
+            return makeAbstention(
+                request: request,
+                origin: origin,
+                fallbackReason: fallbackReason,
+                action: "No change needed right now — replay the aligned passage once to confirm it sounds right.",
+                rationale: "This take finished cleanly with 0 reveals and aligned phrasing, " +
+                    "so withholding a correction fits.",
+                now: now
+            )
         }
-        return observations.isEmpty && (hasBlockingAmbiguity || request.timingAnalysis?.outcome == .declined)
+        return nil
     }
 
     static func shouldAbstainForCleanTake(request: PostTakeCoachingRequest) -> Bool {
@@ -198,7 +173,7 @@ private extension TechniqueLibrary {
     ) -> PhraseAnchor {
         if let matched = observation?.matchedPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
            !matched.isEmpty,
-           request.scriptText.contains(matched) {
+           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(matched, in: request.scriptText) {
             return PhraseAnchor(phrase: matched, fromHandoff: false)
         }
         return selectVerbatimPhrase(
@@ -242,7 +217,7 @@ private extension TechniqueLibrary {
         observation: TimingObservation?
     ) -> String {
         if observation?.kind == .phraseGap {
-            if request.isSpeakerChangeHandoff {
+            if request.isSpeakerChangeHandoff || request.isMultiSpeakerTalk {
                 return "Grounded in the bounded estimated gap without attributing the pause to a speaker."
             }
             return "Grounded directly in the bounded estimated phrase gap from on-device speech timing."

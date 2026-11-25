@@ -73,7 +73,9 @@ final class CoachingStore {
         guard record.sectionRevisionID == request.sectionRevisionID,
               record.promptVersion == request.promptVersion,
               record.contentFingerprint == fingerprint,
-              let suggestion = record.suggestion else {
+              let suggestion = record.suggestion,
+              suggestion.promptVersion == request.promptVersion,
+              suggestion.sectionRevisionID == request.sectionRevisionID else {
             return nil
         }
         return suggestion
@@ -133,7 +135,11 @@ final class CoachingStore {
               record.sectionRevisionID == request.sectionRevisionID,
               record.evidenceVersion == expectedEvidence,
               record.promptVersion == request.promptVersion,
-              let suggestion = record.suggestion else {
+              let suggestion = record.suggestion,
+              suggestion.promptVersion == request.promptVersion,
+              suggestion.sectionRevisionID == request.sectionRevisionID,
+              suggestion.attemptID == request.attemptID,
+              suggestion.evidenceVersion == expectedEvidence else {
             return nil
         }
         return suggestion

@@ -3,75 +3,57 @@ import FoundationModels
 
 nonisolated protocol CoachingModelProviding: Sendable {
     func availability() -> CoachingModelAvailability
-    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelCoachingSuggestion
-    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelCoachingSuggestion
+    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelPreparationSelection
+    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelPostTakeSelection
 }
 
 @Generable
-nonisolated struct GeneratedPreparationOutput: Sendable {
-    @Guide(description: "Set true only if no delivery cue is warranted for this passage.")
+nonisolated struct GeneratedPreparationSelection: Sendable {
+    @Guide(description: "Set true only if an allowed abstentionReasonID applies. Otherwise false.")
     let shouldAbstain: Bool
 
-    @Guide(
-        description: "Exact technique ID copied verbatim from the allowed candidates list, or empty if abstaining."
-    )
+    @Guide(description: "Exact ID from Allowed Abstention Options when shouldAbstain is true; else empty.")
+    let abstentionReasonID: String
+
+    @Guide(description: "Exact ID from Allowed Candidate Techniques when shouldAbstain is false; else empty.")
     let techniqueID: String
 
-    @Guide(
-        description: "Exact verbatim substring copied from the script or handoff cue, or empty if abstaining."
-    )
-    let exactPhrase: String
+    @Guide(description: "Exact ID from Allowed Verbatim Passages when shouldAbstain is false; else empty.")
+    let passageID: String
 
-    @Guide(
-        description: "One concrete delivery experiment in 1-2 short sentences. No scores or voice/accent grading."
-    )
-    let action: String
-
-    @Guide(description: "One brief sentence explaining why this technique fits this passage, or why abstaining fits.")
-    let rationale: String
+    @Guide(description: "Exact ID from Allowed Action Options matching techniqueID; empty when abstaining.")
+    let actionID: String
 }
 
 @Generable
-nonisolated struct GeneratedPostTakeOutput: Sendable {
-    @Guide(
-        description: "Set true if the take looks strong and needs no correction, or if evidence is silent or ambiguous."
-    )
+nonisolated struct GeneratedPostTakeSelection: Sendable {
+    @Guide(description: "Set true when an allowed abstentionReasonID fits best or abstention is required.")
     let shouldAbstain: Bool
 
-    @Guide(
-        description: "Exact technique ID copied verbatim from the allowed candidates list, or empty if abstaining."
-    )
+    @Guide(description: "Exact ID from Allowed Abstention Options when shouldAbstain is true; else empty.")
+    let abstentionReasonID: String
+
+    @Guide(description: "Exact ID from Allowed Candidate Techniques when shouldAbstain is false; else empty.")
     let techniqueID: String
 
-    @Guide(
-        description: "Exact verbatim substring copied from the script or handoff cue, or empty if abstaining."
-    )
-    let exactPhrase: String
+    @Guide(description: "Exact ID from Allowed Verbatim Passages compatible with evidenceID; else empty.")
+    let passageID: String
 
-    @Guide(
-        description: "Exact UUID string copied from validated observations, or empty if abstaining or none applies."
-    )
-    let observationID: String
+    @Guide(description: "Exact ID from Allowed Evidence Options when shouldAbstain is false; else empty.")
+    let evidenceID: String
 
-    @Guide(
-        description: "One concrete delivery experiment or calm abstention note. Never invent numbers or blame speakers."
-    )
-    let action: String
-
-    @Guide(
-        description: "One brief sentence grounded strictly in provided facts without scoring or judging voice/accent."
-    )
-    let rationale: String
+    @Guide(description: "Exact ID from Allowed Action Options matching evidenceID and techniqueID; else empty.")
+    let actionID: String
 }
 
 nonisolated struct AppleFoundationModelsCoachProvider: CoachingModelProviding {
-    private static let englishLocale = Locale(identifier: "en_US")
+    private static let fallbackEnglishLocale = Locale(identifier: "en_US")
 
     func availability() -> CoachingModelAvailability {
         let model = SystemLanguageModel.default
         switch model.availability {
         case .available:
-            if model.supportsLocale(Self.englishLocale) {
+            if Self.supportsEnglishLocale(model: model) {
                 return .available
             }
             return .unavailable(.unsupportedLocale)
@@ -89,50 +71,50 @@ nonisolated struct AppleFoundationModelsCoachProvider: CoachingModelProviding {
         }
     }
 
-    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelCoachingSuggestion {
+    func generatePreparation(_ request: PreparationCoachingRequest) async throws -> RawModelPreparationSelection {
+        let optionSet = PreparationCoachingOptionSet.build(for: request)
         let session = LanguageModelSession(
             model: SystemLanguageModel.default,
             instructions: Self.preparationInstructions
         )
-        let prompt = Self.buildPreparationPrompt(for: request)
-        let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 220)
+        let prompt = Self.buildPreparationPrompt(for: request, optionSet: optionSet)
+        let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 256)
         let response = try await session.respond(
             to: prompt,
-            generating: GeneratedPreparationOutput.self,
+            generating: GeneratedPreparationSelection.self,
             options: options
         )
         let output = response.content
-        return RawModelCoachingSuggestion(
+        return RawModelPreparationSelection(
             shouldAbstain: output.shouldAbstain,
-            techniqueID: output.techniqueID,
-            exactPhrase: output.exactPhrase,
-            observationID: nil,
-            action: output.action,
-            rationale: output.rationale
+            abstentionReasonID: Self.optionalID(output.abstentionReasonID),
+            techniqueID: Self.optionalID(output.techniqueID),
+            passageID: Self.optionalID(output.passageID),
+            actionID: Self.optionalID(output.actionID)
         )
     }
 
-    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelCoachingSuggestion {
+    func generatePostTake(_ request: PostTakeCoachingRequest) async throws -> RawModelPostTakeSelection {
+        let optionSet = PostTakeCoachingOptionSet.build(for: request)
         let session = LanguageModelSession(
             model: SystemLanguageModel.default,
             instructions: Self.postTakeInstructions
         )
-        let prompt = Self.buildPostTakePrompt(for: request)
-        let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 240)
+        let prompt = Self.buildPostTakePrompt(for: request, optionSet: optionSet)
+        let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 256)
         let response = try await session.respond(
             to: prompt,
-            generating: GeneratedPostTakeOutput.self,
+            generating: GeneratedPostTakeSelection.self,
             options: options
         )
         let output = response.content
-        let trimmedObs = output.observationID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return RawModelCoachingSuggestion(
+        return RawModelPostTakeSelection(
             shouldAbstain: output.shouldAbstain,
-            techniqueID: output.techniqueID,
-            exactPhrase: output.exactPhrase,
-            observationID: trimmedObs.isEmpty ? nil : trimmedObs,
-            action: output.action,
-            rationale: output.rationale
+            abstentionReasonID: Self.optionalID(output.abstentionReasonID),
+            techniqueID: Self.optionalID(output.techniqueID),
+            passageID: Self.optionalID(output.passageID),
+            evidenceID: Self.optionalID(output.evidenceID),
+            actionID: Self.optionalID(output.actionID)
         )
     }
 }
@@ -140,111 +122,122 @@ nonisolated struct AppleFoundationModelsCoachProvider: CoachingModelProviding {
 private extension AppleFoundationModelsCoachProvider {
     static let preparationInstructions = """
     You are an offline English presentation rehearsal coach inside Spelum.
-    Offer one optional pre-practice delivery experiment grounded in the user's exact script.
+    Select the best pre-practice option IDs from the supplied bounded menus.
     Rules:
-    - Pick a techniqueID verbatim from the provided candidate techniques list.
-    - Copy exactPhrase verbatim character-for-character from the script or handoff cue. Never rewrite quotes.
-    - Give one concrete delivery experiment in 1-2 short sentences.
-    - Never invent timing numbers, never give scores, and never judge accent, emotion, or voice similarity.
-    - Never blame a speaker or teammate.
+    - Copy IDs verbatim from the provided lists. Never invent new IDs or rewrite passages.
+    - If shouldAbstain is true, provide only an allowed abstentionReasonID
+      and leave techniqueID, passageID, and actionID empty.
+    - If shouldAbstain is false, leave abstentionReasonID empty and pick one
+      techniqueID, one passageID, and one compatible actionID.
+    - Prefer the marked exact phrase or handoff passage when it fits the technique best.
     """
 
     static let postTakeInstructions = """
     You are an offline English presentation rehearsal coach inside Spelum reviewing one saved take.
+    Select the best post-take option IDs from the supplied bounded menus.
     Rules:
-    - Set shouldAbstain = true when the take finished cleanly with no clear issue,
-      or when audio/timing evidence is silent, declined, interrupted, or ambiguous.
-    - When not abstaining, pick a techniqueID verbatim from allowed candidates and
-      copy exactPhrase verbatim from the script or handoff cue.
-    - Only set observationID to a UUID verbatim from validated observations;
-      leave it empty if none applies or when abstaining.
-    - Never invent measurements (WPM, seconds, timestamps, counts), never give scores,
-      and never judge accent, pronunciation, emotion, or voice similarity.
-    - Never attribute pauses or timing to any speaker name or teammate.
+    - Copy IDs verbatim from the provided lists. Never invent new IDs.
+    - When abstention is required or the take finished cleanly with no clear adjustment needed,
+      set shouldAbstain = true, pick an allowed abstentionReasonID, and leave
+      techniqueID, passageID, evidenceID, and actionID empty.
+    - When shouldAbstain is false, leave abstentionReasonID empty and choose one
+      evidenceID, one compatible passageID, one compatible techniqueID, and one compatible actionID.
     """
 
-    static func buildPreparationPrompt(for request: PreparationCoachingRequest) -> String {
+    static func supportsEnglishLocale(model: SystemLanguageModel) -> Bool {
+        let current = Locale.current
+        if current.language.languageCode?.identifier == "en",
+           model.supportsLocale(current) {
+            return true
+        }
+        return model.supportsLocale(fallbackEnglishLocale)
+    }
+
+    static func optionalID(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func buildPreparationPrompt(
+        for request: PreparationCoachingRequest,
+        optionSet: PreparationCoachingOptionSet
+    ) -> String {
         var lines: [String] = [
-            "Task: Pre-practice coaching (\(request.promptVersion))",
+            "Task: Pre-practice bounded selection (\(request.promptVersion))",
             "Section title: \(request.sectionTitle)",
             "Section purpose: \(request.purpose.displayName)",
-            "Speaker change handoff: \(request.isSpeakerChangeHandoff ? "yes" : "no")"
+            "Speaker change handoff: \(request.isSpeakerChangeHandoff ? "yes" : "no")",
+            "Abstention required: \(optionSet.mustAbstain ? "yes" : "no")"
         ]
-        if let handoff = request.handoffCueText, !handoff.isEmpty {
-            lines.append("Handoff cue (verbatim): \(handoff)")
-        }
-        if let exact = request.exactPhrase, !exact.isEmpty {
-            lines.append("Marked exact phrase: \(exact)")
-        }
         if !request.cueWords.isEmpty {
             lines.append("Cue words: \(request.cueWords.joined(separator: ", "))")
         }
-        lines.append("Script text (verbatim):\n\(request.scriptText)")
-        if let pinnedID = request.selectedTechniqueID {
-            lines.append("Required techniqueID: \(pinnedID)")
+        lines.append("Script context:\n\(request.scriptText)")
+        appendAbstentionOptions(optionSet.abstentionOptions, to: &lines)
+        lines.append("Allowed Candidate Techniques:")
+        for technique in optionSet.candidateTechniques {
+            lines.append("- \(technique.id) | \(technique.title) | handoff=\(technique.appliesToHandoff ? "yes" : "no")")
         }
-        lines.append("Allowed candidate techniques:")
-        for technique in request.candidateTechniques {
-            lines.append("- \(technique.id) | \(technique.title) | \(technique.deliveryInstruction)")
+        lines.append("Allowed Verbatim Passages:")
+        for passage in optionSet.passageOptions {
+            lines.append("- \(passage.id) | role=\(passage.role.rawValue) | \"\(passage.phrase)\"")
+        }
+        lines.append("Allowed Action Options:")
+        for action in optionSet.actionOptions {
+            lines.append("- \(action.id) | technique=\(action.techniqueID) | \(action.summaryForModel)")
         }
         return lines.joined(separator: "\n")
     }
 
-    static func buildPostTakePrompt(for request: PostTakeCoachingRequest) -> String {
+    static func buildPostTakePrompt(
+        for request: PostTakeCoachingRequest,
+        optionSet: PostTakeCoachingOptionSet
+    ) -> String {
         var lines: [String] = [
-            "Task: Post-take review coaching (\(request.promptVersion))",
+            "Task: Post-take bounded selection (\(request.promptVersion))",
             "Section title: \(request.sectionTitle)",
             "Section purpose: \(request.purpose.displayName)",
             "Attempt status: \(request.attemptStatus.displayName)",
             "Practice mode: \(request.practiceMode.displayName)",
-            "Measured playable duration: \(String(format: "%.1f", request.playableDuration))s",
-            "Measured script reveals: \(request.revealCount)",
-            "Measured manual markers: \(request.markers.count)",
-            "Multi-speaker handoff: \(request.isSpeakerChangeHandoff ? "yes" : "no")"
+            "Recorded reveals: \(request.revealCount)",
+            "Recorded markers: \(request.markers.count)",
+            "Abstention required: \(optionSet.mustAbstain ? "yes" : "no")"
         ]
-        if let exact = request.exactPhrase, !exact.isEmpty {
-            lines.append("Marked exact phrase: \(exact)")
-        }
-        if let handoff = request.handoffCueText, !handoff.isEmpty {
-            lines.append("Handoff cue (verbatim): \(handoff)")
-        }
-        lines.append("Script text (verbatim):\n\(request.scriptText)")
-        appendTimingEvidence(from: request, to: &lines)
-        lines.append("Allowed candidate techniques:")
-        for technique in request.candidateTechniques {
-            lines.append("- \(technique.id) | \(technique.title) | \(technique.postTakeFocus)")
+        appendAbstentionOptions(optionSet.abstentionOptions, to: &lines)
+        if !optionSet.mustAbstain {
+            lines.append("Allowed Evidence Options:")
+            for item in optionSet.evidenceOptions {
+                let passages = item.compatiblePassageIDs.sorted().joined(separator: ",")
+                lines.append("- \(item.id) | \(item.summaryForModel) | passages=[\(passages)]")
+            }
+            lines.append("Allowed Verbatim Passages:")
+            for passage in optionSet.passageOptions {
+                lines.append("- \(passage.id) | role=\(passage.role.rawValue) | \"\(passage.phrase)\"")
+            }
+            lines.append("Allowed Candidate Techniques:")
+            for technique in optionSet.candidateTechniques {
+                lines.append("- \(technique.id) | \(technique.title) | \(technique.postTakeFocus)")
+            }
+            lines.append("Allowed Action Options:")
+            for action in optionSet.actionOptions {
+                let evList = action.compatibleEvidenceIDs.sorted().joined(separator: ",")
+                lines.append("- \(action.id) | evidence=[\(evList)] | \(action.summaryForModel)")
+            }
         }
         return lines.joined(separator: "\n")
     }
 
-    static func appendTimingEvidence(from request: PostTakeCoachingRequest, to lines: inout [String]) {
-        guard let analysis = request.timingAnalysis else {
-            lines.append("Timing analysis: unavailable")
+    static func appendAbstentionOptions(
+        _ options: [CoachingAbstentionOption],
+        to lines: inout [String]
+    ) {
+        if options.isEmpty {
+            lines.append("Allowed Abstention Options: none")
             return
         }
-        lines.append("Timing analysis outcome: \(analysis.outcome.rawValue)")
-        if let wpm = analysis.estimatedWordsPerMinute {
-            lines.append("Estimated pace: \(Int(wpm.rounded())) WPM")
-        }
-        if analysis.observations.isEmpty {
-            lines.append("Validated observations: none")
-        } else {
-            lines.append("Validated observations (use exact UUID only):")
-            for obs in analysis.observations {
-                let gapText = obs.gapDuration.map { String(format: ", gap=%.1fs", $0) } ?? ""
-                let phraseText = obs.matchedPhrase.map { ", phrase=\"\($0)\"" } ?? ""
-                lines.append(
-                    "- id=\(obs.id.uuidString) | kind=\(obs.kind.rawValue) | " +
-                    "\(String(format: "%.1f", obs.startTime))s-\(String(format: "%.1f", obs.endTime))s" +
-                    "\(gapText)\(phraseText)"
-                )
-            }
-        }
-        if !analysis.ambiguousNotes.isEmpty {
-            lines.append("Ambiguous evidence notes:")
-            for note in analysis.ambiguousNotes {
-                lines.append("- \(note.reason.rawValue): \(note.explanation)")
-            }
+        lines.append("Allowed Abstention Options:")
+        for option in options {
+            lines.append("- \(option.id) | \(option.summaryForModel)")
         }
     }
 }
