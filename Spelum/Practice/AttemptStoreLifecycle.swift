@@ -111,8 +111,10 @@ extension AttemptStore {
     func deleteAttempt(_ attempt: AttemptRecord) throws {
         let attemptID = attempt.id
         let relativePath = attempt.relativeAudioPath
+        let coachingStore = CoachingStore(modelContext: modelContext)
 
         try performAtomicWrite {
+            try coachingStore.deleteCues(forAttemptID: attemptID)
             modelContext.delete(attempt)
         }
 
@@ -132,9 +134,12 @@ extension AttemptStore {
         let attemptTargets: [(id: UUID, relativePath: String?)] = attempts.map {
             ($0.id, $0.relativeAudioPath)
         }
+        let coachingStore = CoachingStore(modelContext: modelContext)
 
         try performAtomicWrite {
+            try coachingStore.deleteCues(forPresentationID: presentationID)
             for attempt in attempts {
+                try coachingStore.deleteCues(forAttemptID: attempt.id)
                 modelContext.delete(attempt)
             }
             modelContext.delete(presentation)
