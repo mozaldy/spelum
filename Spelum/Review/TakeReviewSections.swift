@@ -268,13 +268,15 @@ struct TakeReviewPlaybackCard: View {
 struct TakeReviewFactsAndMarkers: View {
     let attempt: AttemptRecord
     let isAudioLoaded: Bool
+    let currentPlaybackTime: TimeInterval
     let isAccessibilitySize: Bool
     let onSeekMarker: (TimeInterval) -> Void
+    let onAddMarkerAtCurrentTime: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             factsCard
-            if !attempt.markers.isEmpty {
+            if !attempt.markers.isEmpty || isAudioLoaded {
                 markersCard
             }
         }
@@ -282,7 +284,7 @@ struct TakeReviewFactsAndMarkers: View {
 
     private var factsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Recorded Facts")
+            Text("Recorded Facts (Measured)")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
 
@@ -333,37 +335,55 @@ struct TakeReviewFactsAndMarkers: View {
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
 
-            ForEach(attempt.markers) { marker in
-                Button {
-                    if isAudioLoaded {
-                        onSeekMarker(marker.timestamp)
+            if attempt.markers.isEmpty {
+                Text("Place a manual marker while listening to return directly to any moment.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(attempt.markers) { marker in
+                    Button {
+                        if isAudioLoaded { onSeekMarker(marker.timestamp) }
+                    } label: {
+                        HStack {
+                            Text(marker.label).font(.body).foregroundStyle(.primary)
+                            Spacer()
+                            Text(RehearsalTimeFormatter.clockString(for: marker.timestamp))
+                                .font(.callout.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(isAudioLoaded ? Color.accentColor : Color.secondary)
+                        }
+                        .frame(minHeight: 44)
                     }
-                } label: {
-                    HStack {
-                        Text(marker.label)
-                            .font(.body)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Text(RehearsalTimeFormatter.clockString(for: marker.timestamp))
-                            .font(.callout.weight(.medium))
-                            .monospacedDigit()
-                            .foregroundStyle(isAudioLoaded ? Color.accentColor : Color.secondary)
-                    }
-                    .frame(minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .disabled(!isAudioLoaded)
-                .accessibilityLabel(
-                    "\(marker.label), at \(RehearsalTimeFormatter.accessibleDurationString(for: marker.timestamp))"
-                )
-                .accessibilityHint(
-                    isAudioLoaded ? "Seeks playback to this marked moment." : "Recorded marker timestamp."
-                )
-                .accessibilityIdentifier("reviewMarker_\(marker.id.uuidString)")
+                    .buttonStyle(.plain)
+                    .disabled(!isAudioLoaded)
+                    .accessibilityLabel(
+                        "\(marker.label), at \(RehearsalTimeFormatter.accessibleDurationString(for: marker.timestamp))"
+                    )
+                    .accessibilityHint(
+                        isAudioLoaded ? "Seeks playback to this marked moment." : "Recorded marker timestamp."
+                    )
+                    .accessibilityIdentifier("reviewMarker_\(marker.id.uuidString)")
 
-                if marker.id != attempt.markers.last?.id {
-                    Divider()
+                    if marker.id != attempt.markers.last?.id { Divider() }
                 }
+            }
+
+            if isAudioLoaded {
+                if !attempt.markers.isEmpty { Divider() }
+                Button(action: onAddMarkerAtCurrentTime) {
+                    Label(
+                        "Add Marker at \(RehearsalTimeFormatter.clockString(for: currentPlaybackTime))",
+                        systemImage: "flag.badge.ellipsis"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(
+                    "Add manual marker at \(RehearsalTimeFormatter.accessibleDurationString(for: currentPlaybackTime))"
+                )
+                .accessibilityHint("Saves a measured manual marker at the current playback position.")
+                .accessibilityIdentifier("addManualMarkerInReviewButton")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

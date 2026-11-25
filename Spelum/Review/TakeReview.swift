@@ -10,8 +10,21 @@ struct TakeReview: View {
     let onRetry: (PracticeTarget) -> Void
 
     @State private var player = TakeAudioPlayer()
+    @State private var analysisCoordinator: TakeAnalysisCoordinator
     @State private var showingDeleteConfirm = false
-    @State private var deleteErrorMessage: String?
+    @State private var actionErrorMessage: String?
+
+    init(
+        attemptID: UUID,
+        transcriber: (any TakeTranscribing)? = nil,
+        onRetry: @escaping (PracticeTarget) -> Void
+    ) {
+        self.attemptID = attemptID
+        self.onRetry = onRetry
+        self._analysisCoordinator = State(
+            initialValue: TakeAnalysisCoordinator(transcriber: transcriber)
+        )
+    }
 
     private var presentationStore: PresentationStore {
         PresentationStore(modelContext: modelContext)
@@ -64,36 +77,29 @@ struct TakeReview: View {
         } message: {
             Text("This removes only this take and its local audio recording from this device.")
         }
-        .onAppear { loadAudioIfAvailable() }
-        .onDisappear { player.stop() }
+        .onAppear {
+            loadAudioIfAvailable()
+            startOrLoadAnalysisIfAvailable()
+        }
+        .onDisappear {
+            analysisCoordinator.handleViewDisappear()
+            player.stop()
+        }
     }
 
     private func reviewContent(for attempt: AttemptRecord) -> some View {
-        let presentation = try? presentationStore.presentation(withID: attempt.presentationID)
-        let talkRevision = try? presentationStore.talkRevision(withID: attempt.talkRevisionID)
-        let sectionRevision = try? presentationStore.sectionRevision(withID: attempt.sectionRevisionID)
-        let handoff = talkRevision.flatMap {
-            presentationStore.handoffContext(forSectionID: attempt.sectionID, in: $0)
-        }
-        let isOlderRevision = presentation?.currentRevisionID != nil
-            && presentation?.currentRevisionID != attempt.talkRevisionID
-
+        let context = resolvedReviewDisplay(for: attempt)
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let deleteErrorMessage {
-                    Label(deleteErrorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                if let actionErrorMessage {
+                    errorBanner(actionErrorMessage)
                 }
 
                 TakeReviewHeaderCard(
                     attempt: attempt,
-                    presentationTitle: presentation?.title,
-                    sectionTitle: sectionRevision?.title ?? attempt.sectionTitleSnapshot,
-                    isOlderRevision: isOlderRevision,
+                    presentationTitle: context.presentationTitle,
+                    sectionTitle: context.sectionRevision?.title ?? attempt.sectionTitleSnapshot,
+                    isOlderRevision: context.isOlderRevision,
                     isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
                 )
 
@@ -103,20 +109,22 @@ struct TakeReview: View {
                     isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
                 )
 
+                analysisCard(for: context.analysisContext, totalDuration: context.totalDuration)
+
                 TakeReviewFactsAndMarkers(
                     attempt: attempt,
                     isAudioLoaded: player.isLoaded,
+                    currentPlaybackTime: player.currentTime,
                     isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                    onSeekMarker: { timestamp in
-                        player.seek(to: timestamp, autoPlay: true)
-                    }
+                    onSeekMarker: { timestamp in player.seek(to: timestamp, autoPlay: true) },
+                    onAddMarkerAtCurrentTime: { addManualMarker(label: nil) }
                 )
 
-                if let handoff {
+                if let handoff = context.handoff {
                     PracticeHandoffCueCard(handoff: handoff)
                 }
 
-                if let sectionRevision {
+                if let sectionRevision = context.sectionRevision {
                     TakeReviewScriptCard(
                         section: sectionRevision,
                         revisionNumber: attempt.talkRevisionNumber
@@ -130,8 +138,115 @@ struct TakeReview: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    private func retryActionButton(for attempt: AttemptRecord) -> some View {
+    static func performDeletion(
+        attempt: AttemptRecord,
+        attemptStore: AttemptStore,
+        player: TakeAudioPlayer
+    ) throws {
+        player.pause()
+        do {
+            try attemptStore.deleteAttempt(attempt)
+            player.stop()
+        } catch {
+            if !player.isLoaded,
+               attempt.hasPlayableAudio,
+               let url = attemptStore.resolvedAudioURL(for: attempt) {
+                player.load(url: url)
+            }
+            throw error
+        }
+    }
+}
+
+private extension TakeReview {
+    struct ReviewDisplayContext {
+        let presentationTitle: String?
+        let sectionRevision: SectionRevisionRecord?
+        let handoff: HandoffContext?
+        let isOlderRevision: Bool
+        let totalDuration: TimeInterval
+        let analysisContext: TakeAnalysisRequestContext
+    }
+
+    func resolvedReviewDisplay(for attempt: AttemptRecord) -> ReviewDisplayContext {
+        let presentation = try? presentationStore.presentation(withID: attempt.presentationID)
+        let talkRevision = try? presentationStore.talkRevision(withID: attempt.talkRevisionID)
+        let sectionRevision = try? presentationStore.sectionRevision(withID: attempt.sectionRevisionID)
+        let handoff = talkRevision.flatMap {
+            presentationStore.handoffContext(forSectionID: attempt.sectionID, in: $0)
+        }
+        let isOlderRevision = presentation?.currentRevisionID != nil
+            && presentation?.currentRevisionID != attempt.talkRevisionID
+        let totalDuration = max(player.duration, attempt.playableDuration)
+        let analysisContext = makeAnalysisContext(
+            for: attempt,
+            section: sectionRevision,
+            handoff: handoff
+        )
+        return ReviewDisplayContext(
+            presentationTitle: presentation?.title,
+            sectionRevision: sectionRevision,
+            handoff: handoff,
+            isOlderRevision: isOlderRevision,
+            totalDuration: totalDuration,
+            analysisContext: analysisContext
+        )
+    }
+
+    func errorBanner(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .font(.footnote)
+            .foregroundStyle(.red)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    func analysisCard(
+        for analysisContext: TakeAnalysisRequestContext,
+        totalDuration: TimeInterval
+    ) -> some View {
+        TakeReviewAnalysisCard(
+            phase: analysisCoordinator.phase,
+            isAudioLoaded: player.isLoaded,
+            currentPlaybackTime: player.currentTime,
+            totalDuration: totalDuration,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            onSeekObservation: { observation in
+                let target = observation.seekTarget(maxDuration: totalDuration)
+                player.seek(to: target, autoPlay: true)
+            },
+            onAddManualMarker: { suggestedLabel in
+                addManualMarker(label: suggestedLabel)
+            },
+            onInstallAssets: { localeID in
+                analysisCoordinator.installAssetsAndAnalyze(
+                    localeIdentifier: localeID,
+                    context: analysisContext,
+                    attemptStore: attemptStore
+                )
+            },
+            onReanalyze: {
+                analysisCoordinator.reanalyze(
+                    context: analysisContext,
+                    attemptStore: attemptStore
+                )
+            },
+            onDecline: {
+                analysisCoordinator.decline(
+                    context: analysisContext,
+                    attemptStore: attemptStore
+                )
+            },
+            onCancel: {
+                analysisCoordinator.cancelActiveOperation()
+            }
+        )
+    }
+
+    func retryActionButton(for attempt: AttemptRecord) -> some View {
         Button {
+            analysisCoordinator.handleViewDisappear()
             player.stop()
             let target = PracticeTarget(
                 presentationID: attempt.presentationID,
@@ -154,7 +269,7 @@ struct TakeReview: View {
         .accessibilityIdentifier("retrySectionFromReviewButton")
     }
 
-    private func loadAudioIfAvailable() {
+    func loadAudioIfAvailable() {
         guard let attempt,
               attempt.hasPlayableAudio,
               let url = attemptStore.resolvedAudioURL(for: attempt) else {
@@ -163,9 +278,52 @@ struct TakeReview: View {
         player.load(url: url)
     }
 
-    private func deleteCurrentAttempt() {
+    func startOrLoadAnalysisIfAvailable() {
         guard let attempt else { return }
-        deleteErrorMessage = nil
+        let display = resolvedReviewDisplay(for: attempt)
+        analysisCoordinator.loadOrAnalyzeIfReady(context: display.analysisContext, attemptStore: attemptStore)
+    }
+
+    func makeAnalysisContext(
+        for attempt: AttemptRecord,
+        section: SectionRevisionRecord?,
+        handoff: HandoffContext?
+    ) -> TakeAnalysisRequestContext {
+        let isMultiSpeakerOrHandoff = (handoff?.isSpeakerChange == true)
+            || (handoff?.isSingleSpeakerTalk == false)
+        return TakeAnalysisRequestContext(
+            attemptID: attempt.id,
+            talkRevisionID: attempt.talkRevisionID,
+            sectionRevisionID: attempt.sectionRevisionID,
+            relativeAudioPath: attempt.relativeAudioPath,
+            audioURL: attemptStore.resolvedAudioURL(for: attempt),
+            elapsedAudioDuration: attempt.playableDuration > 0 ? attempt.playableDuration : player.duration,
+            hasPlayableAudio: attempt.hasPlayableAudio,
+            isSilentRecall: attempt.isSilentRecall,
+            scriptText: section?.text ?? "",
+            exactPhrase: section?.exactPhrase,
+            cueWords: section?.cueWords ?? [],
+            hasMultipleSpeakersOrHandoff: isMultiSpeakerOrHandoff
+        )
+    }
+
+    func addManualMarker(label: String?) {
+        actionErrorMessage = nil
+        do {
+            _ = try attemptStore.addManualMarker(
+                toAttemptID: attemptID,
+                timestamp: player.currentTime,
+                label: label
+            )
+        } catch {
+            actionErrorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteCurrentAttempt() {
+        guard let attempt else { return }
+        actionErrorMessage = nil
+        analysisCoordinator.invalidateForDeletion()
         do {
             try Self.performDeletion(
                 attempt: attempt,
@@ -174,26 +332,7 @@ struct TakeReview: View {
             )
             dismiss()
         } catch {
-            deleteErrorMessage = error.localizedDescription
-        }
-    }
-
-    static func performDeletion(
-        attempt: AttemptRecord,
-        attemptStore: AttemptStore,
-        player: TakeAudioPlayer
-    ) throws {
-        player.pause()
-        do {
-            try attemptStore.deleteAttempt(attempt)
-            player.stop()
-        } catch {
-            if !player.isLoaded,
-               attempt.hasPlayableAudio,
-               let url = attemptStore.resolvedAudioURL(for: attempt) {
-                player.load(url: url)
-            }
-            throw error
+            actionErrorMessage = error.localizedDescription
         }
     }
 }

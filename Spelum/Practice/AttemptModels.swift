@@ -218,6 +218,7 @@ final class AttemptRecord {
     var markersData: Data
     var interruptionReason: String?
     var isSilentRecall: Bool
+    var timingAnalysisData: Data?
 
     init(
         id: UUID = UUID(),
@@ -232,7 +233,8 @@ final class AttemptRecord {
         revealCount: Int = 0,
         markers: [AttemptMarker] = [],
         interruptionReason: String? = nil,
-        isSilentRecall: Bool = false
+        isSilentRecall: Bool = false,
+        timingAnalysisData: Data? = nil
     ) {
         self.id = id
         self.presentationID = snapshot.presentationID
@@ -252,6 +254,7 @@ final class AttemptRecord {
         self.markersData = Self.encodeMarkers(markers)
         self.interruptionReason = interruptionReason
         self.isSilentRecall = isSilentRecall
+        self.timingAnalysisData = timingAnalysisData
     }
 
     var practiceMode: PracticeMode {
@@ -270,6 +273,11 @@ final class AttemptRecord {
             }
             return lhs.timestamp < rhs.timestamp
         }
+    }
+
+    var timingAnalysis: TimingAnalysisResult? {
+        guard let timingAnalysisData else { return nil }
+        return try? JSONDecoder().decode(TimingAnalysisResult.self, from: timingAnalysisData)
     }
 
     var hasPlayableAudio: Bool {
