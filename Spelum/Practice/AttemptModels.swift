@@ -182,6 +182,7 @@ enum AttemptStoreError: LocalizedError, Equatable, Sendable {
     case invalidRelativeAudioPath
     case attemptNotFound
     case audioDirectoryUnavailable
+    case audioReferenceStateUnknown
 
     var errorDescription: String? {
         switch self {
@@ -191,6 +192,8 @@ enum AttemptStoreError: LocalizedError, Equatable, Sendable {
             "This rehearsal take could not be found."
         case .audioDirectoryUnavailable:
             "Spelum could not access its local rehearsal storage folder."
+        case .audioReferenceStateUnknown:
+            "Spelum could not verify whether another take still uses this audio file."
         }
     }
 }

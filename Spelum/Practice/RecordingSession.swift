@@ -5,27 +5,28 @@ import Observation
 @Observable
 @MainActor
 final class RecordingSession {
-    private let attemptStore: AttemptStore
-    private let permissionProvider: any MicrophonePermissionProviding
-    private let audioSessionManager: any AudioSessionManaging
-    private let recorder: any AudioRecorderControlling
-    private let interruptionMonitor: AudioInterruptionMonitor
-    private let nowProvider: () -> Date
+    let attemptStore: AttemptStore
+    let permissionProvider: any MicrophonePermissionProviding
+    let audioSessionManager: any AudioSessionManaging
+    let recorder: any AudioRecorderControlling
+    let interruptionMonitor: AudioInterruptionMonitor
+    let nowProvider: () -> Date
 
-    private(set) var phase: RecordingSessionPhase = .idle
-    private(set) var permissionStatus: MicrophonePermissionStatus
-    private(set) var practiceMode: PracticeMode
-    private(set) var snapshot: AttemptSnapshotReference
-    private(set) var isScriptRevealed = false
-    private(set) var revealCount = 0
-    private(set) var markers: [AttemptMarker] = []
-    private(set) var elapsedDuration: TimeInterval = 0
-    private(set) var activeAttemptID: UUID?
-    private(set) var microphoneDeniedNoticeVisible = false
+    var phase: RecordingSessionPhase = .idle
+    var permissionStatus: MicrophonePermissionStatus
+    var practiceMode: PracticeMode
+    var snapshot: AttemptSnapshotReference
+    var isScriptRevealed = false
+    var revealCount = 0
+    var markers: [AttemptMarker] = []
+    var elapsedDuration: TimeInterval = 0
+    var activeAttemptID: UUID?
+    var microphoneDeniedNoticeVisible = false
 
-    private var activeRelativeAudioPath: String?
-    private var activeStartedAt: Date?
-    private var elapsedTimer: Timer?
+    var activeRelativeAudioPath: String?
+    var activeStartedAt: Date?
+    var elapsedTimer: Timer?
+    var activePermissionRequestID: UUID?
 
     init(
         attemptStore: AttemptStore,
@@ -112,14 +113,37 @@ final class RecordingSession {
         markers.append(marker)
     }
 
+    func cancelPendingStart() {
+        activePermissionRequestID = nil
+        if phase == .requestingPermission {
+            phase = .idle
+        }
+    }
+
     func startRecording() async {
-        guard canStartNewTake else { return }
+        guard canStartNewTake, !Task.isCancelled else { return }
 
         let status = permissionProvider.currentStatus()
         permissionStatus = status
         if status == .undetermined {
+            let requestID = UUID()
+            activePermissionRequestID = requestID
             phase = .requestingPermission
-            let granted = await permissionProvider.requestAccess()
+            let granted = await withTaskCancellationHandler {
+                await permissionProvider.requestAccess()
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.invalidatePendingStart(matching: requestID)
+                }
+            }
+
+            guard !Task.isCancelled,
+                  activePermissionRequestID == requestID,
+                  phase == .requestingPermission else {
+                invalidatePendingStart(matching: requestID)
+                return
+            }
+            activePermissionRequestID = nil
             permissionStatus = granted ? .granted : .denied
             guard granted else {
                 phase = .idle
@@ -132,6 +156,7 @@ final class RecordingSession {
             return
         }
 
+        guard !Task.isCancelled else { return }
         beginAudioCapture()
     }
 
@@ -175,20 +200,28 @@ final class RecordingSession {
         return persistFinalization(input)
     }
 
-    func discardFailedSave() {
-        guard case .saveFailed(let recovery) = phase else { return }
-        attemptStore.discardUnpersistedAudio(
-            for: recovery.attemptID,
-            relativeAudioPath: recovery.relativeAudioPath
-        )
-        phase = .idle
+    @discardableResult
+    func discardFailedSave() -> Bool {
+        guard case .saveFailed(let recovery) = phase else { return false }
+        do {
+            try attemptStore.discardUnpersistedAudio(
+                for: recovery.attemptID,
+                relativeAudioPath: recovery.relativeAudioPath
+            )
+            phase = .idle
+            return true
+        } catch {
+            phase = .saveFailed(recovery.withDiscardError(error.localizedDescription))
+            return false
+        }
     }
 
     func prepareForRetry(
         snapshot: AttemptSnapshotReference? = nil,
         practiceMode: PracticeMode? = nil
     ) {
-        guard !isActiveTake, phase != .finalizing, phase != .requestingPermission else { return }
+        guard !isActiveTake, phase != .finalizing else { return }
+        cancelPendingStart()
         if let snapshot { self.snapshot = snapshot }
         if let practiceMode { self.practiceMode = practiceMode }
         resetTakeCounters()
@@ -196,189 +229,43 @@ final class RecordingSession {
         phase = .idle
     }
 
+    func clearDeletedAttemptReference(_ deletedAttemptID: UUID) {
+        switch phase {
+        case .interrupted(let attemptID, _, _) where attemptID == deletedAttemptID:
+            phase = .idle
+        case .completed(let attemptID) where attemptID == deletedAttemptID:
+            phase = .idle
+        default:
+            break
+        }
+    }
+
+    func reconcileReferencedAttempt() {
+        let referencedID: UUID?
+        switch phase {
+        case .interrupted(let attemptID, _, _):
+            referencedID = attemptID
+        case .completed(let attemptID):
+            referencedID = attemptID
+        default:
+            referencedID = nil
+        }
+        guard let referencedID else { return }
+        do {
+            if try attemptStore.attempt(withID: referencedID) == nil {
+                phase = .idle
+            }
+        } catch {
+            // Preserve current phase if lookup fails.
+        }
+    }
+
     func handleViewDisappear() {
         if isActiveTake {
             handleInterruption(reason: "Recording stopped when leaving practice.")
         } else {
+            cancelPendingStart()
             stopTimersAndObservers()
         }
-    }
-}
-
-private extension RecordingSession {
-    func finishActiveTake(interrupted: Bool, interruptionReason: String?) -> AttemptRecord? {
-        guard isActiveTake else { return nil }
-        let wasSilentRecall = phase == .silentRecall
-        phase = .finalizing
-        stopTimersAndObservers()
-
-        let finalElapsed = resolvedElapsedDuration(wasSilentRecall: wasSilentRecall)
-        if !wasSilentRecall {
-            recorder.stopRecording()
-            audioSessionManager.deactivate()
-        }
-        return finalizeActiveTake(
-            isSilentRecall: wasSilentRecall,
-            elapsed: finalElapsed,
-            interrupted: interrupted,
-            interruptionReason: interruptionReason
-        )
-    }
-
-    func beginAudioCapture() {
-        resetTakeCounters()
-        microphoneDeniedNoticeVisible = false
-
-        let attemptID = UUID()
-        let startedAt = nowProvider()
-
-        do {
-            try audioSessionManager.activateForRecording()
-            let pending = try attemptStore.beginAttempt(
-                snapshot: snapshot,
-                practiceMode: practiceMode,
-                isSilentRecall: false,
-                startedAt: startedAt,
-                attemptID: attemptID
-            )
-            guard let relativePath = pending.relativeAudioPath else {
-                throw AttemptStoreError.invalidRelativeAudioPath
-            }
-            let audioURL = try attemptStore.resolvedAudioURL(for: relativePath)
-            installRecorderCallbacks()
-            installInterruptionObservers()
-            try recorder.startRecording(to: audioURL)
-
-            activeAttemptID = attemptID
-            activeRelativeAudioPath = relativePath
-            activeStartedAt = startedAt
-            phase = .recording
-            startElapsedTimer()
-        } catch {
-            stopTimersAndObservers()
-            audioSessionManager.deactivate()
-            try? attemptStore.deleteAttempt(id: attemptID)
-            clearActiveState()
-            phase = .error(error.localizedDescription)
-        }
-    }
-
-    func finalizeActiveTake(
-        isSilentRecall: Bool,
-        elapsed: TimeInterval,
-        interrupted: Bool,
-        interruptionReason: String?
-    ) -> AttemptRecord? {
-        let attemptID = activeAttemptID ?? UUID()
-        let startedAt = activeStartedAt ?? nowProvider()
-        let relativePath = activeRelativeAudioPath
-        let finishedAt = nowProvider()
-
-        let input = AttemptFinalizationInput(
-            id: attemptID,
-            snapshot: snapshot,
-            practiceMode: practiceMode,
-            startedAt: startedAt,
-            finishedAt: finishedAt,
-            relativeAudioPath: relativePath,
-            elapsedDuration: elapsed,
-            revealCount: revealCount,
-            markers: markers,
-            isSilentRecall: isSilentRecall,
-            interrupted: interrupted,
-            interruptionReason: interruptionReason
-        )
-        return persistFinalization(input)
-    }
-
-    func persistFinalization(_ input: AttemptFinalizationInput) -> AttemptRecord? {
-        do {
-            let saved = try attemptStore.finalizeAttempt(input)
-            clearActiveState()
-            if saved.status == .interrupted {
-                phase = .interrupted(
-                    attemptID: saved.id,
-                    hasPlayableAudio: saved.hasPlayableAudio,
-                    reason: saved.interruptionReason ?? "Recording was interrupted."
-                )
-            } else {
-                phase = .completed(saved.id)
-            }
-            return saved
-        } catch {
-            clearActiveState()
-            let playable = attemptStore.playableDuration(forRelativePath: input.relativeAudioPath) ?? 0
-            let recovery = PendingSaveRecovery(
-                input: input,
-                playableDuration: playable,
-                errorMessage: error.localizedDescription
-            )
-            phase = .saveFailed(recovery)
-            return nil
-        }
-    }
-
-    func resetTakeCounters() {
-        isScriptRevealed = false
-        revealCount = 0
-        markers = []
-        elapsedDuration = 0
-    }
-
-    func clearActiveState() {
-        activeAttemptID = nil
-        activeRelativeAudioPath = nil
-        activeStartedAt = nil
-    }
-
-    func resolvedElapsedDuration(wasSilentRecall: Bool) -> TimeInterval {
-        let wallElapsed = activeStartedAt.map { max(0, nowProvider().timeIntervalSince($0)) } ?? elapsedDuration
-        if wasSilentRecall {
-            return max(elapsedDuration, wallElapsed)
-        }
-        return max(recorder.currentTime, max(elapsedDuration, wallElapsed))
-    }
-
-    func updateElapsedDuration() {
-        guard isActiveTake else { return }
-        elapsedDuration = resolvedElapsedDuration(wasSilentRecall: phase == .silentRecall)
-    }
-
-    func startElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateElapsedDuration()
-            }
-        }
-    }
-
-    func installRecorderCallbacks() {
-        recorder.onUnexpectedFinish = { [weak self] successfully in
-            guard let self else { return }
-            let reason = successfully
-                ? "Recording finished unexpectedly."
-                : "Audio recording ended before completion."
-            self.handleInterruption(reason: reason)
-        }
-        recorder.onEncodeError = { [weak self] error in
-            guard let self else { return }
-            let reason = error?.localizedDescription ?? "An audio encoding error interrupted this recording."
-            self.handleInterruption(reason: reason)
-        }
-    }
-
-    func installInterruptionObservers() {
-        interruptionMonitor.start { [weak self] reason in
-            self?.handleInterruption(reason: reason)
-        }
-    }
-
-    func stopTimersAndObservers() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
-        recorder.onUnexpectedFinish = nil
-        recorder.onEncodeError = nil
-        interruptionMonitor.stop()
     }
 }

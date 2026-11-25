@@ -13,6 +13,7 @@ final class TakeAudioPlayer: NSObject {
     private var interruptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
     private var loadedURL: URL?
+    private var observerGeneration: UInt64 = 0
 
     private(set) var isLoaded = false
     private(set) var isPlaying = false
@@ -48,6 +49,7 @@ final class TakeAudioPlayer: NSObject {
             let newPlayer = try AVAudioPlayer(contentsOf: url)
             newPlayer.delegate = self
             guard newPlayer.prepareToPlay(), newPlayer.duration.isFinite, newPlayer.duration > 0 else {
+                newPlayer.delegate = nil
                 errorMessage = "This audio file could not be prepared for playback."
                 isLoaded = false
                 duration = 0
@@ -109,8 +111,11 @@ final class TakeAudioPlayer: NSObject {
     func stop() {
         stopProgressTimer()
         removeObservers()
-        player?.stop()
-        player = nil
+        if let current = player {
+            player = nil
+            current.delegate = nil
+            current.stop()
+        }
         loadedURL = nil
         isPlaying = false
         isLoaded = false
@@ -142,18 +147,30 @@ final class TakeAudioPlayer: NSObject {
 
 extension TakeAudioPlayer: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let senderBox = WeakObjectBox(player)
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self,
+                  let activePlayer = self.player,
+                  let sender = senderBox.value,
+                  activePlayer === sender else {
+                return
+            }
             self.stopProgressTimer()
             self.isPlaying = false
-            self.currentTime = flag ? self.duration : self.clampedTime(player.currentTime)
+            self.currentTime = flag ? self.duration : self.clampedTime(activePlayer.currentTime)
             self.audioSessionManager.deactivate()
         }
     }
 
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let senderBox = WeakObjectBox(player)
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self,
+                  let activePlayer = self.player,
+                  let sender = senderBox.value,
+                  activePlayer === sender else {
+                return
+            }
             self.stopProgressTimer()
             self.isPlaying = false
             self.errorMessage = error?.localizedDescription ?? "An error occurred while decoding this recording."
@@ -170,11 +187,18 @@ private extension TakeAudioPlayer {
 
     func startProgressTimer() {
         progressTimer?.invalidate()
+        guard let activePlayer = player else { return }
+        let expectedBox = WeakObjectBox(activePlayer)
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, let player = self.player else { return }
-                self.currentTime = self.clampedTime(player.currentTime)
-                if !player.isPlaying && self.isPlaying {
+                guard let self,
+                      let current = self.player,
+                      let expected = expectedBox.value,
+                      current === expected else {
+                    return
+                }
+                self.currentTime = self.clampedTime(current.currentTime)
+                if !current.isPlaying && self.isPlaying {
                     self.isPlaying = false
                     self.stopProgressTimer()
                 }
@@ -189,6 +213,8 @@ private extension TakeAudioPlayer {
 
     func installObservers() {
         removeObservers()
+        observerGeneration &+= 1
+        let activeGeneration = observerGeneration
         interruptionObserver = notificationCenter.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
@@ -197,6 +223,7 @@ private extension TakeAudioPlayer {
             let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             Task { @MainActor [weak self] in
                 guard let self,
+                      self.observerGeneration == activeGeneration,
                       let typeValue,
                       let type = AVAudioSession.InterruptionType(rawValue: typeValue),
                       type == .began else {
@@ -213,6 +240,7 @@ private extension TakeAudioPlayer {
             let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             Task { @MainActor [weak self] in
                 guard let self,
+                      self.observerGeneration == activeGeneration,
                       let reasonValue,
                       let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
                       reason == .oldDeviceUnavailable else {
@@ -224,6 +252,7 @@ private extension TakeAudioPlayer {
     }
 
     func removeObservers() {
+        observerGeneration &+= 1
         if let interruptionObserver {
             notificationCenter.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
