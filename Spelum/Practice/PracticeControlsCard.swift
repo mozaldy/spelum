@@ -128,6 +128,17 @@ struct PracticeRecoveryBanner: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
+            if let discardError = recovery.discardErrorMessage {
+                Label(
+                    "Could not discard this take: \(discardError) You can retry saving or try discarding again.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("discardFailedSaveErrorLabel")
+            }
+
             AdaptiveActionStack(isAccessibilitySize: isAccessibilitySize) {
                 Button(action: onRetryFailedSave) {
                     Label("Retry Save", systemImage: "arrow.clockwise")

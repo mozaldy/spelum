@@ -166,12 +166,34 @@ struct TakeReview: View {
     private func deleteCurrentAttempt() {
         guard let attempt else { return }
         deleteErrorMessage = nil
-        player.stop()
         do {
-            try attemptStore.deleteAttempt(attempt)
+            try Self.performDeletion(
+                attempt: attempt,
+                attemptStore: attemptStore,
+                player: player
+            )
             dismiss()
         } catch {
             deleteErrorMessage = error.localizedDescription
+        }
+    }
+
+    static func performDeletion(
+        attempt: AttemptRecord,
+        attemptStore: AttemptStore,
+        player: TakeAudioPlayer
+    ) throws {
+        player.pause()
+        do {
+            try attemptStore.deleteAttempt(attempt)
+            player.stop()
+        } catch {
+            if !player.isLoaded,
+               attempt.hasPlayableAudio,
+               let url = attemptStore.resolvedAudioURL(for: attempt) {
+                player.load(url: url)
+            }
+            throw error
         }
     }
 }

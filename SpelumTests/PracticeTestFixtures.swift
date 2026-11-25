@@ -66,6 +66,44 @@ enum PracticeTestFixtures {
         try file.write(from: buffer)
     }
 
+    static func writeSyntheticAACM4A(
+        to url: URL,
+        durationSeconds: Double = 1.5,
+        frequencyHz: Double = 440.0
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let sampleRate = 44_100.0
+        guard let pcmFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(domain: "SyntheticAACAudio", code: 1)
+        }
+        let frameCount = AVAudioFrameCount(sampleRate * durationSeconds)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frameCount) else {
+            throw NSError(domain: "SyntheticAACAudio", code: 2)
+        }
+        buffer.frameLength = frameCount
+        if let channel = buffer.floatChannelData?[0] {
+            for frame in 0 ..< Int(frameCount) {
+                let phase = 2.0 * Double.pi * frequencyHz * Double(frame) / sampleRate
+                channel[frame] = Float(sin(phase) * 0.25)
+            }
+        }
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: AVAudioRecorderController.recordingSettings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try file.write(from: buffer)
+    }
+
     static func seedPresentation(
         in store: PresentationStore,
         title: String = "Keynote Secret Launch"

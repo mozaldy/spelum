@@ -80,13 +80,37 @@ enum RecordingSessionError: LocalizedError, Equatable, Sendable {
     }
 }
 
+final class WeakObjectBox<Object: AnyObject>: @unchecked Sendable {
+    weak var value: Object?
+
+    init(_ value: Object) {
+        self.value = value
+    }
+}
+
 @MainActor
 final class AVAudioRecorderController: NSObject, AudioRecorderControlling {
+    static let recordingSettings: [String: Any] = [
+        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+        AVSampleRateKey: 44_100.0,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+    ]
+
+    private let recorderFactory: (URL, [String: Any]) throws -> AVAudioRecorder
     private var recorder: AVAudioRecorder?
-    private var isStoppingIntentionally = false
 
     var onUnexpectedFinish: ((Bool) -> Void)?
     var onEncodeError: ((Error?) -> Void)?
+
+    init(
+        recorderFactory: @escaping (URL, [String: Any]) throws -> AVAudioRecorder = {
+            try AVAudioRecorder(url: $0, settings: $1)
+        }
+    ) {
+        self.recorderFactory = recorderFactory
+        super.init()
+    }
 
     var currentTime: TimeInterval {
         recorder?.currentTime ?? 0
@@ -97,41 +121,51 @@ final class AVAudioRecorderController: NSObject, AudioRecorderControlling {
     }
 
     func startRecording(to url: URL) throws {
-        isStoppingIntentionally = false
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44_100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        let newRecorder = try AVAudioRecorder(url: url, settings: settings)
+        stopRecording()
+        let newRecorder = try recorderFactory(url, Self.recordingSettings)
         newRecorder.delegate = self
         guard newRecorder.prepareToRecord(), newRecorder.record() else {
+            newRecorder.delegate = nil
             throw RecordingSessionError.recorderStartFailed
         }
         recorder = newRecorder
     }
 
     func stopRecording() {
-        isStoppingIntentionally = true
-        recorder?.stop()
+        guard let current = recorder else { return }
         recorder = nil
+        current.delegate = nil
+        current.stop()
     }
 }
 
 extension AVAudioRecorderController: AVAudioRecorderDelegate {
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        let senderBox = WeakObjectBox(recorder)
         Task { @MainActor [weak self] in
-            guard let self, !self.isStoppingIntentionally else { return }
+            guard let self,
+                  let activeRecorder = self.recorder,
+                  let sender = senderBox.value,
+                  activeRecorder === sender else {
+                return
+            }
             self.recorder = nil
+            activeRecorder.delegate = nil
             self.onUnexpectedFinish?(flag)
         }
     }
 
     nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        let senderBox = WeakObjectBox(recorder)
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self,
+                  let activeRecorder = self.recorder,
+                  let sender = senderBox.value,
+                  activeRecorder === sender else {
+                return
+            }
             self.recorder = nil
+            activeRecorder.delegate = nil
             self.onEncodeError?(error)
         }
     }
@@ -152,8 +186,14 @@ struct PendingSaveRecovery: Equatable, Sendable {
     let interrupted: Bool
     let interruptionReason: String?
     let errorMessage: String
+    let discardErrorMessage: String?
 
-    init(input: AttemptFinalizationInput, playableDuration: TimeInterval, errorMessage: String) {
+    init(
+        input: AttemptFinalizationInput,
+        playableDuration: TimeInterval,
+        errorMessage: String,
+        discardErrorMessage: String? = nil
+    ) {
         self.attemptID = input.id
         self.snapshot = input.snapshot
         self.practiceMode = input.practiceMode
@@ -168,10 +208,65 @@ struct PendingSaveRecovery: Equatable, Sendable {
         self.interrupted = input.interrupted
         self.interruptionReason = input.interruptionReason
         self.errorMessage = errorMessage
+        self.discardErrorMessage = discardErrorMessage
+    }
+
+    private init(
+        attemptID: UUID,
+        snapshot: AttemptSnapshotReference,
+        practiceMode: PracticeMode,
+        startedAt: Date,
+        finishedAt: Date,
+        relativeAudioPath: String?,
+        playableDuration: TimeInterval,
+        elapsedDuration: TimeInterval,
+        revealCount: Int,
+        markers: [AttemptMarker],
+        isSilentRecall: Bool,
+        interrupted: Bool,
+        interruptionReason: String?,
+        errorMessage: String,
+        discardErrorMessage: String?
+    ) {
+        self.attemptID = attemptID
+        self.snapshot = snapshot
+        self.practiceMode = practiceMode
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.relativeAudioPath = relativeAudioPath
+        self.playableDuration = playableDuration
+        self.elapsedDuration = elapsedDuration
+        self.revealCount = revealCount
+        self.markers = markers
+        self.isSilentRecall = isSilentRecall
+        self.interrupted = interrupted
+        self.interruptionReason = interruptionReason
+        self.errorMessage = errorMessage
+        self.discardErrorMessage = discardErrorMessage
     }
 
     var hasPlayableAudio: Bool {
         relativeAudioPath != nil && playableDuration > 0
+    }
+
+    func withDiscardError(_ message: String?) -> PendingSaveRecovery {
+        PendingSaveRecovery(
+            attemptID: attemptID,
+            snapshot: snapshot,
+            practiceMode: practiceMode,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            relativeAudioPath: relativeAudioPath,
+            playableDuration: playableDuration,
+            elapsedDuration: elapsedDuration,
+            revealCount: revealCount,
+            markers: markers,
+            isSilentRecall: isSilentRecall,
+            interrupted: interrupted,
+            interruptionReason: interruptionReason,
+            errorMessage: errorMessage,
+            discardErrorMessage: message
+        )
     }
 }
 
@@ -192,6 +287,7 @@ final class AudioInterruptionMonitor {
     private let notificationCenter: NotificationCenter
     private var interruptionObserver: NSObjectProtocol?
     private var mediaResetObserver: NSObjectProtocol?
+    private var generation: UInt64 = 0
 
     init(notificationCenter: NotificationCenter = .default) {
         self.notificationCenter = notificationCenter
@@ -199,14 +295,19 @@ final class AudioInterruptionMonitor {
 
     func start(onInterrupted: @escaping @MainActor (String) -> Void) {
         stop()
+        generation &+= 1
+        let activeGeneration = generation
+
         interruptionObserver = notificationCenter.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
             queue: .main
-        ) { notification in
+        ) { [weak self] notification in
             let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            Task { @MainActor in
-                guard let typeValue,
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.generation == activeGeneration,
+                      let typeValue,
                       let type = AVAudioSession.InterruptionType(rawValue: typeValue),
                       type == .began else {
                     return
@@ -218,14 +319,16 @@ final class AudioInterruptionMonitor {
             forName: AVAudioSession.mediaServicesWereResetNotification,
             object: nil,
             queue: .main
-        ) { _ in
-            Task { @MainActor in
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == activeGeneration else { return }
                 onInterrupted("Audio services reset during recording.")
             }
         }
     }
 
     func stop() {
+        generation &+= 1
         if let interruptionObserver {
             notificationCenter.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
