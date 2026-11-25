@@ -141,8 +141,10 @@ struct TakeReview: View {
     static func performDeletion(
         attempt: AttemptRecord,
         attemptStore: AttemptStore,
-        player: TakeAudioPlayer
+        player: TakeAudioPlayer,
+        analysisCoordinator: TakeAnalysisCoordinator? = nil
     ) throws {
+        let recoveryToken = analysisCoordinator?.prepareForDeletion(attemptID: attempt.id)
         player.pause()
         do {
             try attemptStore.deleteAttempt(attempt)
@@ -152,6 +154,13 @@ struct TakeReview: View {
                attempt.hasPlayableAudio,
                let url = attemptStore.resolvedAudioURL(for: attempt) {
                 player.load(url: url)
+            }
+            if let recoveryToken {
+                let persisted = (try? attemptStore.attempt(withID: attempt.id))?.timingAnalysis
+                analysisCoordinator?.restoreAfterFailedDeletion(
+                    recoveryToken,
+                    persistedAnalysis: persisted
+                )
             }
             throw error
         }
@@ -180,6 +189,7 @@ private extension TakeReview {
         let totalDuration = max(player.duration, attempt.playableDuration)
         let analysisContext = makeAnalysisContext(
             for: attempt,
+            talkRevision: talkRevision,
             section: sectionRevision,
             handoff: handoff
         )
@@ -286,11 +296,21 @@ private extension TakeReview {
 
     func makeAnalysisContext(
         for attempt: AttemptRecord,
+        talkRevision: TalkRevisionRecord?,
         section: SectionRevisionRecord?,
         handoff: HandoffContext?
     ) -> TakeAnalysisRequestContext {
         let isMultiSpeakerOrHandoff = (handoff?.isSpeakerChange == true)
             || (handoff?.isSingleSpeakerTalk == false)
+        var rawSpeakers: [String] = []
+        if let talkRevision {
+            rawSpeakers.append(contentsOf: presentationStore.orderedSections(in: talkRevision).map(\.speaker))
+        } else if let section {
+            rawSpeakers.append(section.speaker)
+        }
+        let knownSpeakerNames = Array(
+            Set(rawSpeakers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        )
         return TakeAnalysisRequestContext(
             attemptID: attempt.id,
             talkRevisionID: attempt.talkRevisionID,
@@ -303,6 +323,7 @@ private extension TakeReview {
             scriptText: section?.text ?? "",
             exactPhrase: section?.exactPhrase,
             cueWords: section?.cueWords ?? [],
+            knownSpeakerNames: knownSpeakerNames,
             hasMultipleSpeakersOrHandoff: isMultiSpeakerOrHandoff
         )
     }
@@ -323,12 +344,12 @@ private extension TakeReview {
     func deleteCurrentAttempt() {
         guard let attempt else { return }
         actionErrorMessage = nil
-        analysisCoordinator.invalidateForDeletion()
         do {
             try Self.performDeletion(
                 attempt: attempt,
                 attemptStore: attemptStore,
-                player: player
+                player: player,
+                analysisCoordinator: analysisCoordinator
             )
             dismiss()
         } catch {

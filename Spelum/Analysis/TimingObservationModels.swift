@@ -244,6 +244,22 @@ nonisolated struct TimingAnalysisResult: Codable, Equatable, Hashable, Sendable 
     }
 }
 
+nonisolated struct UntimedTranscriptFragment: Equatable, Hashable, Sendable {
+    let text: String
+    let insertionIndex: Int
+    let localeIdentifier: String
+
+    init(
+        text: String,
+        insertionIndex: Int,
+        localeIdentifier: String = "en_US"
+    ) {
+        self.text = text
+        self.insertionIndex = max(0, insertionIndex)
+        self.localeIdentifier = localeIdentifier
+    }
+}
+
 nonisolated struct TimingAnalysisInput: Sendable {
     let attemptID: UUID
     let talkRevisionID: UUID
@@ -252,10 +268,12 @@ nonisolated struct TimingAnalysisInput: Sendable {
     let scriptText: String
     let exactPhrase: String?
     let cueWords: [String]
+    let knownSpeakerNames: [String]
     let hasMultipleSpeakersOrHandoff: Bool
     let segments: [TimedTranscriptSegment]
     let localeIdentifier: String
     let hasUntimedFinalText: Bool
+    let untimedFragments: [UntimedTranscriptFragment]
     let analysisVersion: Int
     let analyzedAt: Date
 
@@ -267,10 +285,12 @@ nonisolated struct TimingAnalysisInput: Sendable {
         scriptText: String,
         exactPhrase: String? = nil,
         cueWords: [String] = [],
+        knownSpeakerNames: [String] = [],
         hasMultipleSpeakersOrHandoff: Bool = false,
         segments: [TimedTranscriptSegment],
         localeIdentifier: String = "en_US",
         hasUntimedFinalText: Bool = false,
+        untimedFragments: [UntimedTranscriptFragment] = [],
         analysisVersion: Int = 1,
         analyzedAt: Date = Date()
     ) {
@@ -281,10 +301,12 @@ nonisolated struct TimingAnalysisInput: Sendable {
         self.scriptText = scriptText
         self.exactPhrase = exactPhrase
         self.cueWords = cueWords
+        self.knownSpeakerNames = knownSpeakerNames
         self.hasMultipleSpeakersOrHandoff = hasMultipleSpeakersOrHandoff
         self.segments = segments
         self.localeIdentifier = localeIdentifier
         self.hasUntimedFinalText = hasUntimedFinalText
+        self.untimedFragments = untimedFragments
         self.analysisVersion = max(1, analysisVersion)
         self.analyzedAt = analyzedAt
     }

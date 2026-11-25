@@ -6,19 +6,28 @@ nonisolated struct PhraseAlignmentOutcome: Sendable {
 }
 
 nonisolated extension TimingObservationsEngine {
-    private struct TimedWordUnit {
+    private struct TimedBoundaryInfo {
         let segmentID: UUID
-        let normalized: String
         let startTime: TimeInterval
         let endTime: TimeInterval
         let isFirstInSegment: Bool
         let isLastInSegment: Bool
     }
 
+    private enum WordUnitTiming {
+        case timed(TimedBoundaryInfo)
+        case untimedBarrier
+    }
+
+    private struct TranscriptWordUnit {
+        let normalized: String
+        let timing: WordUnitTiming
+    }
+
     private struct AlignmentContext {
-        let timeline: [TimedWordUnit]
+        let timeline: [TranscriptWordUnit]
         let overlappingIDs: Set<UUID>
-        let hasUntimedFinalText: Bool
+        let hasIncompleteTiming: Bool
         let localeIdentifier: String
     }
 
@@ -32,10 +41,13 @@ nonisolated extension TimingObservationsEngine {
     static func alignPhrases(
         input: TimingAnalysisInput,
         scriptStructure: ScriptStructure,
-        segments: [TokenizedTimedSegment],
+        stream: SanitizedTranscriptStream,
         overlappingIDs: Set<UUID>
     ) -> PhraseAlignmentOutcome {
-        let timeline = buildTimeline(from: segments)
+        guard !stream.hasUnlocatedUntimedText else {
+            return PhraseAlignmentOutcome(observations: [], notes: [])
+        }
+        let timeline = buildTimeline(from: stream.entries)
         guard !timeline.isEmpty else {
             return PhraseAlignmentOutcome(observations: [], notes: [])
         }
@@ -43,7 +55,7 @@ nonisolated extension TimingObservationsEngine {
         let context = AlignmentContext(
             timeline: timeline,
             overlappingIDs: overlappingIDs,
-            hasUntimedFinalText: input.hasUntimedFinalText,
+            hasIncompleteTiming: stream.hasIncompleteTiming,
             localeIdentifier: input.localeIdentifier
         )
 
@@ -97,8 +109,8 @@ nonisolated extension TimingObservationsEngine {
               !trimmed.isEmpty else {
             return nil
         }
-        let spoken = EnglishWordTokenizer.stripStageDirections(from: trimmed)
-        let key = EnglishWordTokenizer.tokenize(spoken, localeIdentifier: localeIdentifier).map(\.normalized)
+        // Preserve explicitly marked exact phrases and cue words verbatim (including parentheticals & colons).
+        let key = EnglishWordTokenizer.tokenize(trimmed, localeIdentifier: localeIdentifier).map(\.normalized)
         guard !key.isEmpty, evaluatedKeys.insert(key).inserted else {
             return nil
         }
@@ -110,21 +122,41 @@ nonisolated extension TimingObservationsEngine {
         )
     }
 
-    private static func buildTimeline(from segments: [TokenizedTimedSegment]) -> [TimedWordUnit] {
-        var units: [TimedWordUnit] = []
-        for segment in segments {
-            let lastIndex = segment.tokens.count - 1
-            for (index, token) in segment.tokens.enumerated() {
-                units.append(
-                    TimedWordUnit(
-                        segmentID: segment.id,
-                        normalized: token.normalized,
-                        startTime: segment.startTime,
-                        endTime: segment.endTime,
-                        isFirstInSegment: index == 0,
-                        isLastInSegment: index == lastIndex
+    private static func buildTimeline(from entries: [TranscriptStreamEntry]) -> [TranscriptWordUnit] {
+        var units: [TranscriptWordUnit] = []
+        for entry in entries {
+            switch entry {
+            case .timed(let segment):
+                let lastIndex = segment.tokens.count - 1
+                for (index, token) in segment.tokens.enumerated() {
+                    units.append(
+                        TranscriptWordUnit(
+                            normalized: token.normalized,
+                            timing: .timed(
+                                TimedBoundaryInfo(
+                                    segmentID: segment.id,
+                                    startTime: segment.startTime,
+                                    endTime: segment.endTime,
+                                    isFirstInSegment: index == 0,
+                                    isLastInSegment: index == lastIndex
+                                )
+                            )
+                        )
                     )
-                )
+                }
+            case .untimedBarrier(let tokens):
+                if tokens.isEmpty {
+                    units.append(TranscriptWordUnit(normalized: "", timing: .untimedBarrier))
+                } else {
+                    for token in tokens {
+                        units.append(
+                            TranscriptWordUnit(
+                                normalized: token.normalized,
+                                timing: .untimedBarrier
+                            )
+                        )
+                    }
+                }
             }
         }
         return units
@@ -165,13 +197,26 @@ nonisolated extension TimingObservationsEngine {
     ) {
         let endIndex = startIndex + candidate.normalizedTokens.count - 1
         let matchedSlice = context.timeline[startIndex ... endIndex]
-        guard let firstUnit = matchedSlice.first,
-              let lastUnit = matchedSlice.last,
-              !matchedSlice.contains(where: { context.overlappingIDs.contains($0.segmentID) }) else {
+        var timedInfos: [TimedBoundaryInfo] = []
+        timedInfos.reserveCapacity(matchedSlice.count)
+
+        for unit in matchedSlice {
+            switch unit.timing {
+            case .timed(let info):
+                guard !context.overlappingIDs.contains(info.segmentID) else { return }
+                timedInfos.append(info)
+            case .untimedBarrier:
+                // Never invent timestamps across an untimed or dropped finalized word.
+                return
+            }
+        }
+
+        guard let firstInfo = timedInfos.first,
+              let lastInfo = timedInfos.last else {
             return
         }
-        guard firstUnit.isFirstInSegment && lastUnit.isLastInSegment else {
-            if candidate.emitMissingNote && !context.hasUntimedFinalText {
+        guard firstInfo.isFirstInSegment && lastInfo.isLastInSegment else {
+            if candidate.emitMissingNote && !context.hasIncompleteTiming {
                 notes.append(makeCoarseBoundaryNote(for: candidate.displayPhrase))
             }
             return
@@ -181,8 +226,8 @@ nonisolated extension TimingObservationsEngine {
                 kind: candidate.kind,
                 title: observationTitle(for: candidate.kind, displayPhrase: candidate.displayPhrase),
                 detail: "“\(candidate.displayPhrase)” matched once in finalized on-device transcript.",
-                startTime: firstUnit.startTime,
-                endTime: lastUnit.endTime,
+                startTime: firstInfo.startTime,
+                endTime: lastInfo.endTime,
                 matchedPhrase: candidate.displayPhrase
             )
         )
@@ -209,7 +254,7 @@ nonisolated extension TimingObservationsEngine {
             evaluateCandidate(candidate, context: context, observations: &observations, notes: &notes)
         }
 
-        if observations.isEmpty && notes.isEmpty && !candidates.isEmpty {
+        if observations.isEmpty && notes.isEmpty && !candidates.isEmpty && !context.hasIncompleteTiming {
             notes.append(
                 AmbiguousEvidenceNote(
                     reason: .paraphrasedOrMissingWords,
@@ -222,7 +267,10 @@ nonisolated extension TimingObservationsEngine {
         }
     }
 
-    private static func findContiguousMatches(of target: [String], in timeline: [TimedWordUnit]) -> [Int] {
+    private static func findContiguousMatches(
+        of target: [String],
+        in timeline: [TranscriptWordUnit]
+    ) -> [Int] {
         guard !target.isEmpty, target.count <= timeline.count else { return [] }
         let lastPossibleStart = timeline.count - target.count
         var matches: [Int] = []

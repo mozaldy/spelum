@@ -16,6 +16,19 @@ nonisolated struct SpeechTranscriptionOutput: Equatable, Sendable {
     let localeIdentifier: String
     let segments: [TimedTranscriptSegment]
     let hasUntimedFinalText: Bool
+    let untimedFragments: [UntimedTranscriptFragment]
+
+    init(
+        localeIdentifier: String,
+        segments: [TimedTranscriptSegment],
+        hasUntimedFinalText: Bool,
+        untimedFragments: [UntimedTranscriptFragment] = []
+    ) {
+        self.localeIdentifier = localeIdentifier
+        self.segments = segments
+        self.hasUntimedFinalText = hasUntimedFinalText
+        self.untimedFragments = untimedFragments
+    }
 }
 
 nonisolated enum TakeTranscriptionError: LocalizedError, Equatable, Sendable {
@@ -60,65 +73,6 @@ nonisolated protocol TakeTranscribing: Sendable {
         at url: URL,
         localeIdentifier: String
     ) async throws -> SpeechTranscriptionOutput
-}
-
-nonisolated enum SpeechResultSegmentExtractor {
-    struct ExtractionResult: Equatable, Sendable {
-        let segments: [TimedTranscriptSegment]
-        let hasUntimedFinalText: Bool
-    }
-
-    static func extract(
-        from attributedText: AttributedString,
-        isFinal: Bool,
-        localeIdentifier: String
-    ) -> ExtractionResult {
-        guard isFinal else {
-            return ExtractionResult(segments: [], hasUntimedFinalText: false)
-        }
-
-        var segments: [TimedTranscriptSegment] = []
-        var hasUntimedWords = false
-
-        for run in attributedText.runs {
-            let substring = String(attributedText[run.range].characters)
-            let tokens = EnglishWordTokenizer.tokenize(substring, localeIdentifier: localeIdentifier)
-            guard !tokens.isEmpty else {
-                continue
-            }
-
-            guard let timeRange = run.audioTimeRange,
-                  timeRange.isValid,
-                  !timeRange.isIndefinite,
-                  !timeRange.isEmpty else {
-                hasUntimedWords = true
-                continue
-            }
-
-            let startSeconds = timeRange.start.seconds
-            let endSeconds = timeRange.end.seconds
-            guard startSeconds.isFinite,
-                  endSeconds.isFinite,
-                  startSeconds >= 0,
-                  endSeconds > startSeconds else {
-                hasUntimedWords = true
-                continue
-            }
-
-            segments.append(
-                TimedTranscriptSegment(
-                    text: substring.trimmingCharacters(in: .whitespacesAndNewlines),
-                    startTime: startSeconds,
-                    endTime: endSeconds,
-                    confidence: run.transcriptionConfidence,
-                    isFinal: true,
-                    localeIdentifier: localeIdentifier
-                )
-            )
-        }
-
-        return ExtractionResult(segments: segments, hasUntimedFinalText: hasUntimedWords)
-    }
 }
 
 nonisolated final class AppleSpeechTakeTranscriber: TakeTranscribing, Sendable {
@@ -195,6 +149,8 @@ nonisolated final class AppleSpeechTakeTranscriber: TakeTranscribing, Sendable {
             } onCancel: {
                 progress.cancel()
             }
+            observerTask.cancel()
+            await observerTask.value
             onProgress(1.0)
         } catch is CancellationError {
             throw CancellationError()
@@ -238,78 +194,15 @@ nonisolated final class AppleSpeechTakeTranscriber: TakeTranscribing, Sendable {
         }
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        return try await runAnalyzer(
+        let session = AppleFiniteSpeechAnalyzerSession(
             analyzer: analyzer,
             transcriber: transcriber,
-            audioFile: audioFile,
+            audioFile: audioFile
+        )
+        return try await Self.runFiniteAnalyzerSession(
+            session,
             localeIdentifier: locale.identifier
         )
-    }
-
-    private func runAnalyzer(
-        analyzer: SpeechAnalyzer,
-        transcriber: SpeechTranscriber,
-        audioFile: AVAudioFile,
-        localeIdentifier: String
-    ) async throws -> SpeechTranscriptionOutput {
-        try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: SpeechTranscriptionOutput?.self) { group in
-                group.addTask {
-                    var collectedSegments: [TimedTranscriptSegment] = []
-                    var hasUntimed = false
-                    for try await result in transcriber.results {
-                        try Task.checkCancellation()
-                        let extracted = SpeechResultSegmentExtractor.extract(
-                            from: result.text,
-                            isFinal: result.isFinal,
-                            localeIdentifier: localeIdentifier
-                        )
-                        collectedSegments.append(contentsOf: extracted.segments)
-                        if extracted.hasUntimedFinalText {
-                            hasUntimed = true
-                        }
-                    }
-                    return SpeechTranscriptionOutput(
-                        localeIdentifier: localeIdentifier,
-                        segments: collectedSegments,
-                        hasUntimedFinalText: hasUntimed
-                    )
-                }
-
-                group.addTask {
-                    _ = try await analyzer.analyzeSequence(from: audioFile)
-                    try await analyzer.finalizeAndFinishThroughEndOfInput()
-                    return nil
-                }
-
-                var finalOutput: SpeechTranscriptionOutput?
-                do {
-                    for try await partial in group {
-                        if let output = partial {
-                            finalOutput = output
-                        }
-                    }
-                } catch is CancellationError {
-                    group.cancelAll()
-                    await analyzer.cancelAndFinishNow()
-                    throw CancellationError()
-                } catch {
-                    group.cancelAll()
-                    await analyzer.cancelAndFinishNow()
-                    throw mapSpeechAnalysisError(error, localeIdentifier: localeIdentifier)
-                }
-
-                return finalOutput ?? SpeechTranscriptionOutput(
-                    localeIdentifier: localeIdentifier,
-                    segments: [],
-                    hasUntimedFinalText: false
-                )
-            }
-        } onCancel: {
-            Task {
-                await analyzer.cancelAndFinishNow()
-            }
-        }
     }
 
     private func makeTranscriber(for locale: Locale) -> SpeechTranscriber {
@@ -366,24 +259,5 @@ nonisolated final class AppleSpeechTakeTranscriber: TakeTranscribing, Sendable {
         return .assetDownloadFailed(
             "English speech assets could not be installed: \(error.localizedDescription)"
         )
-    }
-
-    private func mapSpeechAnalysisError(_ error: Error, localeIdentifier: String) -> TakeTranscriptionError {
-        if let typed = error as? TakeTranscriptionError {
-            return typed
-        }
-        if let speechError = error as? SFSpeechError {
-            switch speechError.code {
-            case .noModel, .assetLocaleNotAllocated:
-                return .assetsNotInstalled(localeIdentifier: localeIdentifier)
-            case .cannotAllocateUnsupportedLocale:
-                return .unsupportedLocale("The selected English locale is unsupported on this device.")
-            case .tooManyAssetLocalesAllocated:
-                return .assetReservationLimitReached
-            default:
-                break
-            }
-        }
-        return .analysisFailed("On-device transcription could not complete: \(error.localizedDescription)")
     }
 }

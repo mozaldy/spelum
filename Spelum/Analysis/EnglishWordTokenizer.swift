@@ -58,7 +58,15 @@ nonisolated enum EnglishWordTokenizer {
         return lowercased.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
     }
 
-    static func extractScriptStructure(from scriptText: String) -> ScriptStructure {
+    static func extractScriptStructure(
+        from scriptText: String,
+        knownSpeakerNames: [String] = []
+    ) -> ScriptStructure {
+        let normalizedSpeakers = Set(
+            knownSpeakerNames
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
         let ranges = findStageDirectionRanges(in: scriptText)
         guard !ranges.isEmpty else {
             return ScriptStructure(
@@ -66,7 +74,10 @@ nonisolated enum EnglishWordTokenizer {
                 stageDirections: [],
                 hasInteriorStageDirection: false,
                 hasTrailingStageDirection: false,
-                spokenCandidatePhrases: extractSpokenCandidatePhrases(from: scriptText)
+                spokenCandidatePhrases: extractSpokenCandidatePhrases(
+                    from: scriptText,
+                    knownSpeakerNames: normalizedSpeakers
+                )
             )
         }
 
@@ -98,7 +109,10 @@ nonisolated enum EnglishWordTokenizer {
             stageDirections: stageDirections,
             hasInteriorStageDirection: hasInterior,
             hasTrailingStageDirection: hasTrailing,
-            spokenCandidatePhrases: extractSpokenCandidatePhrases(from: spoken)
+            spokenCandidatePhrases: extractSpokenCandidatePhrases(
+                from: spoken,
+                knownSpeakerNames: normalizedSpeakers
+            )
         )
     }
 
@@ -108,7 +122,9 @@ nonisolated enum EnglishWordTokenizer {
     }
 
     private static func findStageDirectionRanges(in text: String) -> [Range<String.Index>] {
-        let pattern = #"\[[^\[\]\n]+\]|\([^\(\)\n]+\)"#
+        // Only treat explicit bracketed cues [like this] as stage directions.
+        // Ordinary parenthetical prose (like this) is spoken dialogue and must be preserved.
+        let pattern = #"\[[^\[\]\n]+\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let fullRange = NSRange(text.startIndex ..< text.endIndex, in: text)
         return regex.matches(in: text, range: fullRange).compactMap { match in
@@ -116,12 +132,15 @@ nonisolated enum EnglishWordTokenizer {
         }
     }
 
-    private static func extractSpokenCandidatePhrases(from spokenText: String) -> [String] {
+    private static func extractSpokenCandidatePhrases(
+        from spokenText: String,
+        knownSpeakerNames: Set<String>
+    ) -> [String] {
         let lines = spokenText.components(separatedBy: .newlines)
         var phrases: [String] = []
 
         for rawLine in lines {
-            let trimmed = stripLeadingSpeakerPrefix(from: rawLine)
+            let trimmed = stripKnownSpeakerPrefix(from: rawLine, knownSpeakerNames: knownSpeakerNames)
             guard !trimmed.isEmpty else { continue }
             let sentenceTokenizer = NLTokenizer(unit: .sentence)
             sentenceTokenizer.string = trimmed
@@ -137,17 +156,23 @@ nonisolated enum EnglishWordTokenizer {
         return phrases
     }
 
-    private static func stripLeadingSpeakerPrefix(from line: String) -> String {
+    private static func stripKnownSpeakerPrefix(
+        from line: String,
+        knownSpeakerNames: Set<String>
+    ) -> String {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let colonIndex = trimmed.firstIndex(of: ":") else { return trimmed }
-        let prefix = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
-        let prefixTokens = tokenize(prefix)
-        guard !prefixTokens.isEmpty,
-              prefixTokens.count <= 3,
-              prefix.count <= 32 else {
+        guard !knownSpeakerNames.isEmpty,
+              let colonIndex = trimmed.firstIndex(of: ":") else {
+            return trimmed
+        }
+        let prefix = String(trimmed[..<colonIndex])
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        guard knownSpeakerNames.contains(prefix) else {
             return trimmed
         }
         let remainderIndex = trimmed.index(after: colonIndex)
-        return String(trimmed[remainderIndex...]).trimmingCharacters(in: .whitespaces)
+        let remainder = String(trimmed[remainderIndex...]).trimmingCharacters(in: .whitespaces)
+        return remainder.isEmpty ? trimmed : remainder
     }
 }

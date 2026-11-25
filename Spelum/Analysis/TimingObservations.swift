@@ -1,5 +1,18 @@
 import Foundation
 
+nonisolated enum TranscriptStreamEntry: Sendable {
+    case timed(TokenizedTimedSegment)
+    case untimedBarrier(tokens: [EnglishWordToken])
+}
+
+nonisolated struct SanitizedTranscriptStream: Sendable {
+    let entries: [TranscriptStreamEntry]
+    let timedSegments: [TokenizedTimedSegment]
+    let hasIncompleteTiming: Bool
+    let hasUnlocatedUntimedText: Bool
+    let hasTrailingBarrier: Bool
+}
+
 nonisolated enum TimingObservationsEngine {
     static let defaultMinimumGapDuration: TimeInterval = 0.6
     static let defaultSeekLeadIn: TimeInterval = 0.5
@@ -23,21 +36,28 @@ nonisolated enum TimingObservationsEngine {
             : 0
         let safeMinGap = max(0.05, minimumGapDuration.isFinite ? minimumGapDuration : defaultMinimumGapDuration)
         guard safeDuration > 0 else {
-            return makeEmptyResult(input: input, elapsedDuration: 0)
+            return makeEmptyResult(
+                input: input,
+                elapsedDuration: 0,
+                hasIncompleteTiming: input.hasUntimedFinalText || !input.untimedFragments.isEmpty
+            )
         }
 
-        let tokenizedSegments = sanitizeAndTokenizeSegments(
-            input.segments,
-            elapsedAudioDuration: safeDuration,
-            fallbackLocale: input.localeIdentifier
+        let stream = buildOrderedTranscriptStream(
+            input: input,
+            elapsedAudioDuration: safeDuration
         )
-        guard !tokenizedSegments.isEmpty else {
-            return makeEmptyResult(input: input, elapsedDuration: safeDuration)
+        guard !stream.timedSegments.isEmpty else {
+            return makeEmptyResult(
+                input: input,
+                elapsedDuration: safeDuration,
+                hasIncompleteTiming: stream.hasIncompleteTiming
+            )
         }
 
         return buildCompletedResult(
             input: input,
-            segments: tokenizedSegments,
+            stream: stream,
             elapsedDuration: safeDuration,
             minimumGapDuration: safeMinGap
         )
@@ -45,14 +65,19 @@ nonisolated enum TimingObservationsEngine {
 
     private static func buildCompletedResult(
         input: TimingAnalysisInput,
-        segments: [TokenizedTimedSegment],
+        stream: SanitizedTranscriptStream,
         elapsedDuration: TimeInterval,
         minimumGapDuration: TimeInterval
     ) -> TimingAnalysisResult {
+        let segments = stream.timedSegments
         let overlappingIDs = detectOverlappingSegmentIDs(in: segments)
         let hasOverlap = !overlappingIDs.isEmpty
         let totalWords = segments.reduce(0) { $0 + $1.tokens.count }
-        let scriptStructure = EnglishWordTokenizer.extractScriptStructure(from: input.scriptText)
+        let granularity = resolveGranularity(for: segments)
+        let scriptStructure = EnglishWordTokenizer.extractScriptStructure(
+            from: input.scriptText,
+            knownSpeakerNames: input.knownSpeakerNames
+        )
         let gapContext = GapDetectionContext(
             overlappingIDs: overlappingIDs,
             elapsedAudioDuration: elapsedDuration,
@@ -61,18 +86,22 @@ nonisolated enum TimingObservationsEngine {
             hasInteriorStageDirection: scriptStructure.hasInteriorStageDirection
         )
 
-        let gapObservations = detectBoundedPhraseGaps(segments: segments, context: gapContext)
-        let contextualNotes = collectContextualNotes(
-            input: input,
-            scriptStructure: scriptStructure,
-            segments: segments,
-            gapContext: gapContext
-        )
+        let gapObservations = detectBoundedPhraseGaps(stream: stream, context: gapContext)
         let alignmentOutcome = alignPhrases(
             input: input,
             scriptStructure: scriptStructure,
-            segments: segments,
+            stream: stream,
             overlappingIDs: overlappingIDs
+        )
+        let contextualNotes = collectContextualNotes(
+            ContextualNoteContext(
+                input: input,
+                scriptStructure: scriptStructure,
+                stream: stream,
+                granularity: granularity,
+                gapContext: gapContext,
+                alignmentNotes: alignmentOutcome.notes
+            )
         )
         let sortedObservations = (gapObservations + alignmentOutcome.observations).sorted { lhs, rhs in
             lhs.startTime == rhs.startTime ? lhs.endTime < rhs.endTime : lhs.startTime < rhs.startTime
@@ -88,19 +117,19 @@ nonisolated enum TimingObservationsEngine {
             outcome: .completed,
             elapsedAudioDuration: elapsedDuration,
             recognizedWordCount: totalWords,
-            timingGranularity: resolveGranularity(for: segments),
+            timingGranularity: granularity,
             estimatedWordsPerMinute: computeEstimatedWPM(
                 wordCount: totalWords,
                 elapsedDuration: elapsedDuration,
                 localeIdentifier: input.localeIdentifier,
-                hasOverlap: hasOverlap,
-                hasUntimedFinalText: input.hasUntimedFinalText
+                granularity: granularity,
+                hasReliableTiming: !hasOverlap && !stream.hasIncompleteTiming
             ),
             observations: sortedObservations,
             ambiguousNotes: contextualNotes + alignmentOutcome.notes,
             finalizedSegmentCount: segments.count,
             hasOverlappingSegments: hasOverlap,
-            hasUntimedFinalText: input.hasUntimedFinalText
+            hasUntimedFinalText: stream.hasIncompleteTiming
         )
     }
 
@@ -108,53 +137,148 @@ nonisolated enum TimingObservationsEngine {
         wordCount: Int,
         elapsedDuration: TimeInterval,
         localeIdentifier: String,
-        hasOverlap: Bool,
-        hasUntimedFinalText: Bool
+        granularity: TimingGranularity,
+        hasReliableTiming: Bool
     ) -> Double? {
         guard isEnglishLocaleIdentifier(localeIdentifier),
-              !hasOverlap,
-              !hasUntimedFinalText,
+              granularity == .wordLevel,
+              hasReliableTiming,
               wordCount > 0,
               elapsedDuration > 0 else {
             return nil
         }
         return Double(wordCount) * 60.0 / elapsedDuration
     }
+}
 
-    private static func sanitizeAndTokenizeSegments(
-        _ segments: [TimedTranscriptSegment],
-        elapsedAudioDuration: TimeInterval,
-        fallbackLocale: String
-    ) -> [TokenizedTimedSegment] {
-        var result: [TokenizedTimedSegment] = []
-        for segment in segments {
-            guard segment.isFinal,
-                  segment.isValidTimeRange,
-                  segment.startTime < elapsedAudioDuration,
-                  segment.endTime <= elapsedAudioDuration + tailDurationTolerance else {
-                continue
-            }
-            let localeID = segment.localeIdentifier.isEmpty ? fallbackLocale : segment.localeIdentifier
-            let tokens = EnglishWordTokenizer.tokenize(segment.text, localeIdentifier: localeID)
-            guard !tokens.isEmpty else { continue }
-            let clampedEnd = min(segment.endTime, elapsedAudioDuration)
-            guard clampedEnd > segment.startTime else { continue }
-            result.append(
-                TokenizedTimedSegment(
-                    id: segment.id,
-                    rawText: segment.text,
-                    startTime: segment.startTime,
-                    endTime: clampedEnd,
-                    tokens: tokens
-                )
-            )
-        }
-        return result.sorted { lhs, rhs in
-            lhs.startTime == rhs.startTime ? lhs.endTime < rhs.endTime : lhs.startTime < rhs.startTime
-        }
+private nonisolated extension TimingObservationsEngine {
+    struct StreamBuildState {
+        var entries: [TranscriptStreamEntry] = []
+        var rawTimed: [TokenizedTimedSegment] = []
+        var hasDroppedFinalSegment = false
+        var hasAnyBarrier = false
     }
 
-    private static func detectOverlappingSegmentIDs(in segments: [TokenizedTimedSegment]) -> Set<UUID> {
+    static func buildOrderedTranscriptStream(
+        input: TimingAnalysisInput,
+        elapsedAudioDuration: TimeInterval
+    ) -> SanitizedTranscriptStream {
+        var fragmentsBySlot: [Int: [UntimedTranscriptFragment]] = [:]
+        for fragment in input.untimedFragments {
+            let slot = min(max(fragment.insertionIndex, 0), input.segments.count)
+            fragmentsBySlot[slot, default: []].append(fragment)
+        }
+
+        var state = StreamBuildState()
+        for slot in 0 ... input.segments.count {
+            if let fragments = fragmentsBySlot[slot] {
+                for fragment in fragments {
+                    let localeID = fragment.localeIdentifier.isEmpty
+                        ? input.localeIdentifier
+                        : fragment.localeIdentifier
+                    let tokens = EnglishWordTokenizer.tokenize(fragment.text, localeIdentifier: localeID)
+                    state.hasAnyBarrier = true
+                    state.entries.append(.untimedBarrier(tokens: tokens))
+                }
+            }
+            guard slot < input.segments.count else { continue }
+            let segment = input.segments[slot]
+            guard segment.isFinal else { continue }
+
+            let localeID = segment.localeIdentifier.isEmpty
+                ? input.localeIdentifier
+                : segment.localeIdentifier
+            let tokens = EnglishWordTokenizer.tokenize(segment.text, localeIdentifier: localeID)
+            guard !tokens.isEmpty else { continue }
+
+            if let validSegment = validateTimedSegment(
+                segment,
+                tokens: tokens,
+                elapsedAudioDuration: elapsedAudioDuration
+            ) {
+                state.entries.append(.timed(validSegment))
+                state.rawTimed.append(validSegment)
+            } else {
+                state.hasDroppedFinalSegment = true
+                state.hasAnyBarrier = true
+                state.entries.append(.untimedBarrier(tokens: tokens))
+            }
+        }
+
+        return finalizeStream(state: state, input: input)
+    }
+
+    static func validateTimedSegment(
+        _ segment: TimedTranscriptSegment,
+        tokens: [EnglishWordToken],
+        elapsedAudioDuration: TimeInterval
+    ) -> TokenizedTimedSegment? {
+        guard segment.isValidTimeRange,
+              segment.startTime < elapsedAudioDuration,
+              segment.endTime <= elapsedAudioDuration + tailDurationTolerance else {
+            return nil
+        }
+        let clampedEnd = min(segment.endTime, elapsedAudioDuration)
+        guard clampedEnd > segment.startTime else { return nil }
+        return TokenizedTimedSegment(
+            id: segment.id,
+            rawText: segment.text,
+            startTime: segment.startTime,
+            endTime: clampedEnd,
+            tokens: tokens
+        )
+    }
+
+    static func finalizeStream(
+        state: StreamBuildState,
+        input: TimingAnalysisInput
+    ) -> SanitizedTranscriptStream {
+        let isMonotonic = zip(state.rawTimed, state.rawTimed.dropFirst()).allSatisfy { lhs, rhs in
+            lhs.startTime < rhs.startTime
+                || (lhs.startTime == rhs.startTime && lhs.endTime <= rhs.endTime)
+        }
+        let sortedTimed = isMonotonic
+            ? state.rawTimed
+            : state.rawTimed.sorted { lhs, rhs in
+                lhs.startTime == rhs.startTime ? lhs.endTime < rhs.endTime : lhs.startTime < rhs.startTime
+            }
+        let finalEntries: [TranscriptStreamEntry] = (!isMonotonic && !state.hasAnyBarrier)
+            ? sortedTimed.map { .timed($0) }
+            : state.entries
+        let hasIncompleteTiming = input.hasUntimedFinalText
+            || state.hasDroppedFinalSegment
+            || !input.untimedFragments.isEmpty
+        let hasUnlocatedUntimedText = (input.hasUntimedFinalText && !state.hasAnyBarrier)
+            || (state.hasAnyBarrier && !isMonotonic)
+        let hasTrailingBarrier = computeHasTrailingBarrier(in: finalEntries)
+
+        return SanitizedTranscriptStream(
+            entries: finalEntries,
+            timedSegments: sortedTimed,
+            hasIncompleteTiming: hasIncompleteTiming,
+            hasUnlocatedUntimedText: hasUnlocatedUntimedText,
+            hasTrailingBarrier: hasTrailingBarrier
+        )
+    }
+
+    static func computeHasTrailingBarrier(in entries: [TranscriptStreamEntry]) -> Bool {
+        var sawTimed = false
+        var trailingBarrier = false
+        for entry in entries {
+            switch entry {
+            case .timed:
+                sawTimed = true
+                trailingBarrier = false
+            case .untimedBarrier:
+                if sawTimed {
+                    trailingBarrier = true
+                }
+            }
+        }
+        return trailingBarrier
+    }
+
+    static func detectOverlappingSegmentIDs(in segments: [TokenizedTimedSegment]) -> Set<UUID> {
         var overlapping: Set<UUID> = []
         var activeMaxEnd: TimeInterval = -1
         var activeMaxSegmentID: UUID?
@@ -173,170 +297,17 @@ nonisolated enum TimingObservationsEngine {
         return overlapping
     }
 
-    private static func resolveGranularity(for segments: [TokenizedTimedSegment]) -> TimingGranularity {
+    static func resolveGranularity(for segments: [TokenizedTimedSegment]) -> TimingGranularity {
         guard !segments.isEmpty else { return .none }
         return segments.allSatisfy { $0.tokens.count == 1 } ? .wordLevel : .phraseLevel
     }
 
-    private static func isEnglishLocaleIdentifier(_ identifier: String) -> Bool {
+    static func isEnglishLocaleIdentifier(_ identifier: String) -> Bool {
         let locale = Locale(identifier: identifier)
         if let code = locale.language.languageCode?.identifier.lowercased() {
             return code == "en"
         }
         let lower = identifier.lowercased()
         return lower == "en" || lower.hasPrefix("en_") || lower.hasPrefix("en-")
-    }
-}
-
-nonisolated extension TimingObservationsEngine {
-    static func collectContextualNotes(
-        input: TimingAnalysisInput,
-        scriptStructure: ScriptStructure,
-        segments: [TokenizedTimedSegment],
-        gapContext: GapDetectionContext
-    ) -> [AmbiguousEvidenceNote] {
-        var notes: [AmbiguousEvidenceNote] = []
-
-        if !gapContext.overlappingIDs.isEmpty {
-            notes.append(
-                AmbiguousEvidenceNote(
-                    reason: .overlappingRanges,
-                    title: "Overlapping speech timestamps",
-                    explanation: "On-device speech reported overlapping time ranges, so Spelum omitted " +
-                        "affected pace and alignment estimates. Replay the audio or add a manual marker.",
-                    suggestedMarkerLabel: "Check timing"
-                )
-            )
-        }
-        if input.hasUntimedFinalText {
-            notes.append(
-                AmbiguousEvidenceNote(
-                    reason: .incompleteTimingCoverage,
-                    title: "Incomplete word timestamps",
-                    explanation: "Some recognized words did not include audio timestamps, so pace and " +
-                        "affected alignments were omitted. Replay the take or place a manual marker.",
-                    suggestedMarkerLabel: "Check moment"
-                )
-            )
-        }
-        if scriptStructure.hasTrailingStageDirection,
-           let lastSegment = segments.last,
-           (gapContext.elapsedAudioDuration - lastSegment.endTime) >= gapContext.minimumGapDuration {
-            notes.append(
-                AmbiguousEvidenceNote(
-                    reason: .stageDirectionSilence,
-                    title: "Stage direction followed by trailing silence",
-                    explanation: "Your script ends with a stage direction and silence without a following " +
-                        "spoken phrase, so Spelum did not report a phrase gap. Replay to check demo timing.",
-                    suggestedMarkerLabel: "Check stage direction"
-                )
-            )
-        }
-        if input.hasMultipleSpeakersOrHandoff {
-            notes.append(
-                AmbiguousEvidenceNote(
-                    reason: .multiSpeakerBoundary,
-                    title: "Handoff and speaker boundaries",
-                    explanation: "On-device transcript timing cannot attribute pauses to a specific speaker. " +
-                        "Replay the transition or add a manual marker to judge the handoff.",
-                    suggestedMarkerLabel: "Check handoff"
-                )
-            )
-        }
-        return notes
-    }
-
-    static func makeEmptyResult(
-        input: TimingAnalysisInput,
-        elapsedDuration: TimeInterval
-    ) -> TimingAnalysisResult {
-        var notes: [AmbiguousEvidenceNote] = [
-            AmbiguousEvidenceNote(
-                reason: .emptyTranscript,
-                title: "No timed speech recognized",
-                explanation: "No finalized English speech segments with timestamps were detected in this " +
-                    "recording. Playback and manual markers remain available.",
-                suggestedMarkerLabel: "Marked moment",
-                offersManualMarking: elapsedDuration > 0
-            )
-        ]
-        if input.hasUntimedFinalText {
-            notes.append(
-                AmbiguousEvidenceNote(
-                    reason: .incompleteTimingCoverage,
-                    title: "Incomplete word timestamps",
-                    explanation: "Speech text was returned without audio time ranges, so timing estimates " +
-                        "were omitted.",
-                    suggestedMarkerLabel: "Check moment",
-                    offersManualMarking: elapsedDuration > 0
-                )
-            )
-        }
-        return TimingAnalysisResult(
-            analysisVersion: input.analysisVersion,
-            attemptID: input.attemptID,
-            talkRevisionID: input.talkRevisionID,
-            sectionRevisionID: input.sectionRevisionID,
-            analyzedAt: input.analyzedAt,
-            localeIdentifier: input.localeIdentifier,
-            outcome: .completed,
-            elapsedAudioDuration: elapsedDuration,
-            recognizedWordCount: 0,
-            timingGranularity: .none,
-            estimatedWordsPerMinute: nil,
-            observations: [],
-            ambiguousNotes: notes,
-            finalizedSegmentCount: 0,
-            hasOverlappingSegments: false,
-            hasUntimedFinalText: input.hasUntimedFinalText
-        )
-    }
-
-    static func detectBoundedPhraseGaps(
-        segments: [TokenizedTimedSegment],
-        context: GapDetectionContext
-    ) -> [TimingObservation] {
-        guard segments.count >= 2 else { return [] }
-        var gaps: [TimingObservation] = []
-
-        for index in 0 ..< (segments.count - 1) {
-            let preceding = segments[index]
-            let following = segments[index + 1]
-            guard !context.overlappingIDs.contains(preceding.id),
-                  !context.overlappingIDs.contains(following.id) else {
-                continue
-            }
-            let gapDuration = following.startTime - preceding.endTime
-            guard gapDuration.isFinite,
-                  gapDuration >= context.minimumGapDuration,
-                  preceding.endTime <= context.elapsedAudioDuration,
-                  following.startTime <= context.elapsedAudioDuration else {
-                continue
-            }
-            let precedingWord = preceding.tokens.last?.raw ?? preceding.rawText
-            let followingWord = following.tokens.first?.raw ?? following.rawText
-            let formattedGap = String(format: "%.1f", gapDuration)
-
-            var detail = "Estimated pause between “\(precedingWord)” and “\(followingWord)”."
-            if context.hasMultipleSpeakersOrHandoff {
-                detail += " Transcript timing cannot assign this pause to a specific speaker."
-            } else if context.hasInteriorStageDirection {
-                detail += " Script includes a stage direction; replay to judge whether this pause fits."
-            }
-
-            gaps.append(
-                TimingObservation(
-                    kind: .phraseGap,
-                    title: "Estimated \(formattedGap) s Gap",
-                    detail: detail,
-                    startTime: preceding.endTime,
-                    endTime: following.startTime,
-                    gapDuration: gapDuration,
-                    precedingContext: precedingWord,
-                    followingContext: followingWord
-                )
-            )
-        }
-        return gaps
     }
 }

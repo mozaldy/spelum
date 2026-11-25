@@ -241,3 +241,33 @@ enum Task5TestHelpers {
         ]
     }
 }
+
+actor SimpleAsyncGate {
+    private var isWaiting = false
+    private var isReleased = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        if isReleased { return }
+        isWaiting = true
+        observer?.resume()
+        observer = nil
+        await withCheckedContinuation { continuation in
+            waiter = continuation
+        }
+    }
+
+    func waitUntilWaiting() async {
+        if isWaiting { return }
+        await withCheckedContinuation { continuation in
+            observer = continuation
+        }
+    }
+
+    func release() {
+        isReleased = true
+        waiter?.resume()
+        waiter = nil
+    }
+}
