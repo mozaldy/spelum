@@ -44,6 +44,7 @@ struct PracticeView: View {
     private var allAttempts: [AttemptRecord]
 
     @State private var session: RecordingSession?
+    @State private var coachCoordinator: PreparationCoachCoordinator?
     @State private var pinnedTalkRevisionID: UUID?
     @State private var pinnedSectionRevisionID: UUID?
     @State private var lastAutoOpenedAttemptID: UUID?
@@ -57,6 +58,10 @@ struct PracticeView: View {
 
     private var attemptStore: AttemptStore {
         AttemptStore(modelContext: modelContext)
+    }
+
+    private var coachingStore: CoachingStore {
+        CoachingStore(modelContext: modelContext)
     }
 
     private var resolvedTalkRevision: TalkRevisionRecord? {
@@ -123,10 +128,17 @@ struct PracticeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             initializeSessionIfNeeded()
+            refreshPreparationCoach()
             session?.refreshPermissionStatus()
             session?.reconcileReferencedAttempt()
         }
-        .onChange(of: target.retryToken) { _, _ in resetSessionForNewTarget() }
+        .onChange(of: target.retryToken) { _, _ in
+            resetSessionForNewTarget()
+            refreshPreparationCoach()
+        }
+        .onChange(of: resolvedSection?.revisionID) { _, _ in
+            refreshPreparationCoach()
+        }
         .onChange(of: sectionAttempts.map(\.id)) { _, _ in
             session?.reconcileReferencedAttempt()
         }
@@ -143,7 +155,10 @@ struct PracticeView: View {
             lastAutoOpenedAttemptID = attemptID
             onOpenReview(attemptID)
         }
-        .onDisappear { session?.handleViewDisappear() }
+        .onDisappear {
+            coachCoordinator?.handleViewDisappear()
+            session?.handleViewDisappear()
+        }
         .confirmationDialog(
             "Delete this rehearsal take?",
             isPresented: Binding(
@@ -212,6 +227,14 @@ struct PracticeView: View {
                     onToggleReveal: { session.toggleReveal() }
                 )
 
+                if let coachCoordinator {
+                    PracticeCoachingCard(
+                        coordinator: coachCoordinator,
+                        isActiveTake: session.isActiveTake,
+                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                    )
+                }
+
                 captureAndHistoryCards(session: session)
             }
             .padding()
@@ -264,6 +287,38 @@ private extension PracticeView {
     func initializeSessionIfNeeded() {
         guard session == nil else { return }
         resetSessionForNewTarget()
+    }
+
+    func refreshPreparationCoach() {
+        guard let section = resolvedSection,
+              let talkRevision = resolvedTalkRevision else {
+            return
+        }
+        let coordinator: PreparationCoachCoordinator
+        if let existing = coachCoordinator {
+            coordinator = existing
+        } else {
+            coordinator = PreparationCoachCoordinator(coachingStore: coachingStore)
+            coachCoordinator = coordinator
+        }
+        let speakers = Array(
+            Set(
+                presentationStore.orderedSections(in: talkRevision)
+                    .map { $0.speaker.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        )
+        let selectedTechID = coordinator.activeRequest?.sectionRevisionID == section.revisionID
+            ? coordinator.activeRequest?.selectedTechniqueID
+            : nil
+        let request = SectionCoachService.makePreparationRequest(
+            section: section,
+            talkRevisionID: talkRevision.id,
+            handoff: handoffContext,
+            knownSpeakerNames: speakers,
+            selectedTechniqueID: selectedTechID
+        )
+        coordinator.load(request: request)
     }
 
     func resetSessionForNewTarget() {
@@ -330,71 +385,5 @@ private extension PracticeView {
         } catch {
             historyErrorMessage = error.localizedDescription
         }
-    }
-}
-
-struct PracticeHistoryCard: View {
-    let attempts: [AttemptRecord]
-    let currentSectionRevisionID: UUID?
-    let errorMessage: String?
-    let isAccessibilitySize: Bool
-    let onOpenReview: (UUID) -> Void
-    let onRequestDelete: (AttemptRecord) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Saved Takes (\(attempts.count))", systemImage: "clock")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
-
-            if attempts.isEmpty {
-                Text("Completed, interrupted, and silent takes for this section appear here for replay and retry.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(attempts, id: \.id) { attempt in
-                    HStack(alignment: .center, spacing: 8) {
-                        Button {
-                            onOpenReview(attempt.id)
-                        } label: {
-                            PracticeHistoryRow(
-                                attempt: attempt,
-                                isCurrentSectionRevision: attempt.sectionRevisionID == currentSectionRevisionID,
-                                isAccessibilitySize: isAccessibilitySize
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("historyAttemptRow_\(attempt.id.uuidString)")
-
-                        Button(role: .destructive) {
-                            onRequestDelete(attempt)
-                        } label: {
-                            Image(systemName: "trash")
-                                .frame(minWidth: 44, minHeight: 44)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel(
-                            "Delete take from \(attempt.startedAt.formatted(date: .abbreviated, time: .shortened))"
-                        )
-                        .accessibilityIdentifier("deleteHistoryAttemptButton_\(attempt.id.uuidString)")
-                    }
-                    if attempt.id != attempts.last?.id {
-                        Divider()
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("sectionHistoryCard")
     }
 }

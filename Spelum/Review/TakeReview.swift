@@ -11,6 +11,7 @@ struct TakeReview: View {
 
     @State private var player = TakeAudioPlayer()
     @State private var analysisCoordinator: TakeAnalysisCoordinator
+    @State private var coachCoordinator: PostTakeCoachCoordinator?
     @State private var showingDeleteConfirm = false
     @State private var actionErrorMessage: String?
 
@@ -32,6 +33,10 @@ struct TakeReview: View {
 
     private var attemptStore: AttemptStore {
         AttemptStore(modelContext: modelContext)
+    }
+
+    private var coachingStore: CoachingStore {
+        CoachingStore(modelContext: modelContext)
     }
 
     private var attempt: AttemptRecord? {
@@ -80,9 +85,17 @@ struct TakeReview: View {
         .onAppear {
             loadAudioIfAvailable()
             startOrLoadAnalysisIfAvailable()
+            refreshPostTakeCoach()
+        }
+        .onChange(of: analysisCoordinator.phase) { _, _ in
+            refreshPostTakeCoach()
+        }
+        .onChange(of: attempt?.markers.count) { _, _ in
+            refreshPostTakeCoach()
         }
         .onDisappear {
             analysisCoordinator.handleViewDisappear()
+            coachCoordinator?.handleViewDisappear()
             player.stop()
         }
     }
@@ -110,6 +123,22 @@ struct TakeReview: View {
                 )
 
                 analysisCard(for: context.analysisContext, totalDuration: context.totalDuration)
+
+                if let coachCoordinator {
+                    TakeReviewCoachingCard(
+                        coordinator: coachCoordinator,
+                        observations: context.currentObservations,
+                        isAudioLoaded: player.isLoaded,
+                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                        onSeekObservation: { observation in
+                            let target = observation.seekTarget(maxDuration: context.totalDuration)
+                            player.seek(to: target, autoPlay: true)
+                        },
+                        onRequestOnDevice: {
+                            coachCoordinator.requestOnDeviceSuggestion(attemptStore: attemptStore)
+                        }
+                    )
+                }
 
                 TakeReviewFactsAndMarkers(
                     attempt: attempt,
@@ -142,9 +171,11 @@ struct TakeReview: View {
         attempt: AttemptRecord,
         attemptStore: AttemptStore,
         player: TakeAudioPlayer,
-        analysisCoordinator: TakeAnalysisCoordinator? = nil
+        analysisCoordinator: TakeAnalysisCoordinator? = nil,
+        coachCoordinator: PostTakeCoachCoordinator? = nil
     ) throws {
         let recoveryToken = analysisCoordinator?.prepareForDeletion(attemptID: attempt.id)
+        let coachRecoveryToken = coachCoordinator?.prepareForDeletion(attemptID: attempt.id)
         player.pause()
         do {
             try attemptStore.deleteAttempt(attempt)
@@ -162,44 +193,22 @@ struct TakeReview: View {
                     persistedAnalysis: persisted
                 )
             }
+            if let coachRecoveryToken {
+                coachCoordinator?.restoreAfterFailedDeletion(coachRecoveryToken)
+            }
             throw error
         }
     }
 }
 
 private extension TakeReview {
-    struct ReviewDisplayContext {
-        let presentationTitle: String?
-        let sectionRevision: SectionRevisionRecord?
-        let handoff: HandoffContext?
-        let isOlderRevision: Bool
-        let totalDuration: TimeInterval
-        let analysisContext: TakeAnalysisRequestContext
-    }
-
-    func resolvedReviewDisplay(for attempt: AttemptRecord) -> ReviewDisplayContext {
-        let presentation = try? presentationStore.presentation(withID: attempt.presentationID)
-        let talkRevision = try? presentationStore.talkRevision(withID: attempt.talkRevisionID)
-        let sectionRevision = try? presentationStore.sectionRevision(withID: attempt.sectionRevisionID)
-        let handoff = talkRevision.flatMap {
-            presentationStore.handoffContext(forSectionID: attempt.sectionID, in: $0)
-        }
-        let isOlderRevision = presentation?.currentRevisionID != nil
-            && presentation?.currentRevisionID != attempt.talkRevisionID
-        let totalDuration = max(player.duration, attempt.playableDuration)
-        let analysisContext = makeAnalysisContext(
+    func resolvedReviewDisplay(for attempt: AttemptRecord) -> TakeReviewDisplaySnapshot {
+        TakeReviewContextBuilder.buildSnapshot(
             for: attempt,
-            talkRevision: talkRevision,
-            section: sectionRevision,
-            handoff: handoff
-        )
-        return ReviewDisplayContext(
-            presentationTitle: presentation?.title,
-            sectionRevision: sectionRevision,
-            handoff: handoff,
-            isOlderRevision: isOlderRevision,
-            totalDuration: totalDuration,
-            analysisContext: analysisContext
+            presentationStore: presentationStore,
+            attemptStore: attemptStore,
+            playerDuration: player.duration,
+            analysisPhase: analysisCoordinator.phase
         )
     }
 
@@ -257,6 +266,7 @@ private extension TakeReview {
     func retryActionButton(for attempt: AttemptRecord) -> some View {
         Button {
             analysisCoordinator.handleViewDisappear()
+            coachCoordinator?.handleViewDisappear()
             player.stop()
             let target = PracticeTarget(
                 presentationID: attempt.presentationID,
@@ -294,38 +304,26 @@ private extension TakeReview {
         analysisCoordinator.loadOrAnalyzeIfReady(context: display.analysisContext, attemptStore: attemptStore)
     }
 
-    func makeAnalysisContext(
-        for attempt: AttemptRecord,
-        talkRevision: TalkRevisionRecord?,
-        section: SectionRevisionRecord?,
-        handoff: HandoffContext?
-    ) -> TakeAnalysisRequestContext {
-        let isMultiSpeakerOrHandoff = (handoff?.isSpeakerChange == true)
-            || (handoff?.isSingleSpeakerTalk == false)
-        var rawSpeakers: [String] = []
-        if let talkRevision {
-            rawSpeakers.append(contentsOf: presentationStore.orderedSections(in: talkRevision).map(\.speaker))
-        } else if let section {
-            rawSpeakers.append(section.speaker)
+    func refreshPostTakeCoach() {
+        guard let attempt else { return }
+        let display = resolvedReviewDisplay(for: attempt)
+        guard let sectionRevision = display.sectionRevision else { return }
+        let coordinator: PostTakeCoachCoordinator
+        if let existing = coachCoordinator {
+            coordinator = existing
+        } else {
+            let created = PostTakeCoachCoordinator(coachingStore: coachingStore)
+            coachCoordinator = created
+            coordinator = created
         }
-        let knownSpeakerNames = Array(
-            Set(rawSpeakers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        let request = SectionCoachService.makePostTakeRequest(
+            attempt: attempt,
+            section: sectionRevision,
+            handoff: display.handoff,
+            knownSpeakerNames: display.analysisContext.knownSpeakerNames,
+            timingAnalysis: display.currentTimingAnalysis
         )
-        return TakeAnalysisRequestContext(
-            attemptID: attempt.id,
-            talkRevisionID: attempt.talkRevisionID,
-            sectionRevisionID: attempt.sectionRevisionID,
-            relativeAudioPath: attempt.relativeAudioPath,
-            audioURL: attemptStore.resolvedAudioURL(for: attempt),
-            elapsedAudioDuration: attempt.playableDuration > 0 ? attempt.playableDuration : player.duration,
-            hasPlayableAudio: attempt.hasPlayableAudio,
-            isSilentRecall: attempt.isSilentRecall,
-            scriptText: section?.text ?? "",
-            exactPhrase: section?.exactPhrase,
-            cueWords: section?.cueWords ?? [],
-            knownSpeakerNames: knownSpeakerNames,
-            hasMultipleSpeakersOrHandoff: isMultiSpeakerOrHandoff
-        )
+        coordinator.load(request: request)
     }
 
     func addManualMarker(label: String?) {
@@ -336,6 +334,7 @@ private extension TakeReview {
                 timestamp: player.currentTime,
                 label: label
             )
+            refreshPostTakeCoach()
         } catch {
             actionErrorMessage = error.localizedDescription
         }
@@ -349,48 +348,12 @@ private extension TakeReview {
                 attempt: attempt,
                 attemptStore: attemptStore,
                 player: player,
-                analysisCoordinator: analysisCoordinator
+                analysisCoordinator: analysisCoordinator,
+                coachCoordinator: coachCoordinator
             )
             dismiss()
         } catch {
             actionErrorMessage = error.localizedDescription
         }
-    }
-}
-
-struct TakeReviewScriptCard: View {
-    let section: SectionRevisionRecord
-    let revisionNumber: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Snapshotted Script (Revision \(revisionNumber))", systemImage: "doc.text")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-
-            if let exactPhrase = section.exactPhrase,
-               !exactPhrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Exact Phrase", systemImage: "quote.opening")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
-                    Text(exactPhrase)
-                        .font(.body.weight(.medium))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityElement(children: .combine)
-            }
-
-            Text(section.text)
-                .font(.body)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("reviewSnapshottedScriptText")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 }
