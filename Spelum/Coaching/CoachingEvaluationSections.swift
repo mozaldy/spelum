@@ -114,7 +114,7 @@ struct CoachingEvaluationCaseRow: View {
 
     private var rowSubtitle: String {
         var parts = [entry.category.displayName]
-        if entry.expectsAbstention {
+        if isUnblinded, entry.expectsAbstention {
             parts.append("Abstention check")
         }
         if isUnblinded, let ms = entry.modelLatencyMilliseconds {

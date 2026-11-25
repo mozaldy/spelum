@@ -130,7 +130,7 @@ private extension CoachingEvaluationRunner {
                     handoffCueText: evalCase.handoffCueText,
                     tags: evalCase.tags,
                     expectsAbstention: evalCase.expectsAbstention,
-                    contextSummary: "Purpose: \(evalCase.purpose.displayName) · \(evalCase.notes)",
+                    contextSummary: "Purpose: \(evalCase.purpose.displayName)",
                     authored: authored,
                     model: modelCue,
                     latencyMS: elapsedMS,
