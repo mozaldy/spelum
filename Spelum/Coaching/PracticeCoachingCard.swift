@@ -2,11 +2,31 @@ import SwiftUI
 
 struct PracticeCoachingCard: View {
     let coordinator: PreparationCoachCoordinator
+    let practiceMode: PracticeMode
+    let isScriptRevealed: Bool
+    let sectionExactPhrase: String?
+    let handoffCueText: String?
     let isActiveTake: Bool
     let isAccessibilitySize: Bool
+    let onRevealScript: () -> Void
 
     @State private var showingEditSheet = false
     @State private var actionErrorMessage: String?
+
+    private var currentPolicy: PracticeCoachingConcealmentPolicy? {
+        guard let cue = coordinator.currentCue, !cue.isDismissed else { return nil }
+        return PracticeCoachingConcealmentPolicy.evaluate(
+            practiceMode: practiceMode,
+            isScriptRevealed: isScriptRevealed,
+            sectionExactPhrase: sectionExactPhrase,
+            handoffCueText: handoffCueText,
+            cue: cue
+        )
+    }
+
+    private var canPresentEditSheet: Bool {
+        !isActiveTake && (currentPolicy?.allowsEditing == true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -31,8 +51,15 @@ struct PracticeCoachingCard: View {
             } else if let cue = coordinator.currentCue {
                 if cue.isDismissed {
                     dismissedView
-                } else {
-                    activeCueContent(cue)
+                } else if let policy = currentPolicy {
+                    if policy.showsCueBody {
+                        activeCueContent(cue, policy: policy)
+                    } else {
+                        PracticeCoachingConcealedCueView(
+                            isActiveTake: isActiveTake,
+                            onRevealScript: onRevealScript
+                        )
+                    }
                 }
             }
         }
@@ -40,8 +67,13 @@ struct PracticeCoachingCard: View {
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityIdentifier("practiceCoachingCard")
+        .onChange(of: canPresentEditSheet) { _, allowed in
+            if !allowed {
+                showingEditSheet = false
+            }
+        }
         .sheet(isPresented: $showingEditSheet) {
-            if let cue = coordinator.currentCue {
+            if canPresentEditSheet, let cue = coordinator.currentCue {
                 CoachingEditCueSheet(
                     title: "Edit Pre-Practice Cue",
                     originalAction: cue.action,
@@ -86,7 +118,10 @@ struct PracticeCoachingCard: View {
         }
     }
 
-    private func activeCueContent(_ cue: CoachingSuggestion) -> some View {
+    private func activeCueContent(
+        _ cue: CoachingSuggestion,
+        policy: PracticeCoachingConcealmentPolicy
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             CoachingOriginBadgesView(cue: cue, isAccessibilitySize: isAccessibilitySize)
 
@@ -98,7 +133,14 @@ struct PracticeCoachingCard: View {
             }
 
             if let phrase = cue.exactPhrase, !phrase.isEmpty {
-                CoachingQuotedPassageBox(phrase: phrase, fromHandoff: cue.exactPhraseFromHandoff)
+                if policy.showsQuotedPassage {
+                    CoachingQuotedPassageBox(phrase: phrase, fromHandoff: cue.exactPhraseFromHandoff)
+                } else {
+                    PracticeCoachingConcealedPassageBox(
+                        isActiveTake: isActiveTake,
+                        onRevealScript: onRevealScript
+                    )
+                }
             }
 
             Text(cue.displayedAction)
@@ -119,13 +161,84 @@ struct PracticeCoachingCard: View {
                     .accessibilityIdentifier("practiceCoachStatusNote")
             }
 
-            CoachingProvenanceDisclosure(cue: cue)
-
-            if !isActiveTake {
-                Divider()
-                techniquePickerMenu
-                actionButtons(for: cue)
+            if policy.showsProvenanceDisclosure {
+                CoachingProvenanceDisclosure(cue: cue)
             }
+
+            if !isActiveTake && policy.allowsCustomActions {
+                Divider()
+                PracticeCoachingActionControls(
+                    coordinator: coordinator,
+                    cue: cue,
+                    allowsEditing: policy.allowsEditing,
+                    isAccessibilitySize: isAccessibilitySize,
+                    onEdit: { showingEditSheet = true },
+                    onDismiss: dismissCue,
+                    onResetToAuthored: resetToAuthored
+                )
+            }
+        }
+    }
+
+    private func saveEditedCue(_ text: String) {
+        actionErrorMessage = nil
+        do {
+            try coordinator.saveEditedAction(text)
+        } catch {
+            actionErrorMessage = "Could not save edited cue: \(error.localizedDescription)"
+        }
+    }
+
+    private func dismissCue() {
+        actionErrorMessage = nil
+        do {
+            try coordinator.dismissCurrentCue()
+        } catch {
+            actionErrorMessage = "Could not dismiss cue: \(error.localizedDescription)"
+        }
+    }
+
+    private func restoreCue() {
+        actionErrorMessage = nil
+        do {
+            try coordinator.restoreDismissedCue()
+        } catch {
+            actionErrorMessage = "Could not restore cue: \(error.localizedDescription)"
+        }
+    }
+
+    private func resetToAuthored() {
+        actionErrorMessage = nil
+        do {
+            try coordinator.resetToAuthoredCue()
+        } catch {
+            actionErrorMessage = "Could not restore authored cue: \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct PracticeCoachingActionControls: View {
+    let coordinator: PreparationCoachCoordinator
+    let cue: CoachingSuggestion
+    let allowsEditing: Bool
+    let isAccessibilitySize: Bool
+    let onEdit: () -> Void
+    let onDismiss: () -> Void
+    let onResetToAuthored: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            techniquePickerMenu
+            editAndDismissRow
+            if cue.origin == .onDeviceModel || cue.isUserEdited {
+                Button(action: onResetToAuthored) {
+                    Label("Use Authored Cue", systemImage: "book.closed")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("resetPracticeCueToAuthoredButton")
+            }
+            onDeviceButton
         }
     }
 
@@ -166,10 +279,8 @@ struct PracticeCoachingCard: View {
     }
 
     @ViewBuilder
-    private func actionButtons(for cue: CoachingSuggestion) -> some View {
-        let onDeviceAvailable = coordinator.modelAvailability.isAvailable
-
-        VStack(alignment: .leading, spacing: 8) {
+    private var editAndDismissRow: some View {
+        if allowsEditing {
             if isAccessibilitySize {
                 VStack(spacing: 8) {
                     editButton
@@ -181,50 +292,13 @@ struct PracticeCoachingCard: View {
                     dismissButton
                 }
             }
-
-            if cue.origin == .onDeviceModel || cue.isUserEdited {
-                Button {
-                    resetToAuthored()
-                } label: {
-                    Label("Use Authored Cue", systemImage: "book.closed")
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("resetPracticeCueToAuthoredButton")
-            }
-
-            Button {
-                coordinator.requestOnDeviceSuggestion()
-            } label: {
-                Label(
-                    onDeviceAvailable ? "Try On-Device Coach" : "Try On-Device Coach (Unavailable)",
-                    systemImage: "cpu"
-                )
-                .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Try Apple On-Device Coach")
-            .accessibilityHint(
-                onDeviceAvailable
-                    ? "Generates a grounded suggestion using Apple’s on-device Foundation Model."
-                    : coordinator.modelAvailability.shortStatusLabel
-            )
-            .accessibilityIdentifier("tryOnDevicePracticeCoachButton")
-
-            if !onDeviceAvailable {
-                Text(coordinator.modelAvailability.shortStatusLabel + " — authored default stays active.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("practiceCoachModelAvailabilityNote")
-            }
+        } else {
+            dismissButton
         }
     }
 
     private var editButton: some View {
-        Button {
-            showingEditSheet = true
-        } label: {
+        Button(action: onEdit) {
             Label("Edit Cue", systemImage: "pencil")
                 .frame(maxWidth: .infinity, minHeight: 44)
         }
@@ -233,9 +307,7 @@ struct PracticeCoachingCard: View {
     }
 
     private var dismissButton: some View {
-        Button {
-            dismissCue()
-        } label: {
+        Button(action: onDismiss) {
             Label("Dismiss", systemImage: "eye.slash")
                 .frame(maxWidth: .infinity, minHeight: 44)
         }
@@ -243,39 +315,33 @@ struct PracticeCoachingCard: View {
         .accessibilityIdentifier("dismissPracticeCueButton")
     }
 
-    private func saveEditedCue(_ text: String) {
-        actionErrorMessage = nil
-        do {
-            try coordinator.saveEditedAction(text)
-        } catch {
-            actionErrorMessage = error.localizedDescription
+    @ViewBuilder
+    private var onDeviceButton: some View {
+        let onDeviceAvailable = coordinator.modelAvailability.isAvailable
+        Button {
+            coordinator.requestOnDeviceSuggestion()
+        } label: {
+            Label(
+                onDeviceAvailable ? "Try On-Device Coach" : "Try On-Device Coach (Unavailable)",
+                systemImage: "cpu"
+            )
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
-    }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Try Apple On-Device Coach")
+        .accessibilityHint(
+            onDeviceAvailable
+                ? "Generates a grounded suggestion using Apple’s on-device Foundation Model."
+                : coordinator.modelAvailability.shortStatusLabel
+        )
+        .accessibilityIdentifier("tryOnDevicePracticeCoachButton")
 
-    private func dismissCue() {
-        actionErrorMessage = nil
-        do {
-            try coordinator.dismissCurrentCue()
-        } catch {
-            actionErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func restoreCue() {
-        actionErrorMessage = nil
-        do {
-            try coordinator.restoreDismissedCue()
-        } catch {
-            actionErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func resetToAuthored() {
-        actionErrorMessage = nil
-        do {
-            try coordinator.resetToAuthoredCue()
-        } catch {
-            actionErrorMessage = error.localizedDescription
+        if !onDeviceAvailable {
+            Text(coordinator.modelAvailability.shortStatusLabel + " — authored default stays active.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("practiceCoachModelAvailabilityNote")
         }
     }
 }

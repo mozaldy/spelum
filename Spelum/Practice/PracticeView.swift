@@ -230,8 +230,13 @@ struct PracticeView: View {
                 if let coachCoordinator {
                     PracticeCoachingCard(
                         coordinator: coachCoordinator,
+                        practiceMode: session.practiceMode,
+                        isScriptRevealed: session.isScriptRevealed,
+                        sectionExactPhrase: section.exactPhrase,
+                        handoffCueText: handoffContext?.effectiveCueText,
                         isActiveTake: session.isActiveTake,
-                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                        onRevealScript: { session.activateReveal() }
                     )
                 }
 

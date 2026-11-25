@@ -36,14 +36,21 @@ struct CoachingUIAccessibilityTests {
         let coordinators = [activeCoordinator, dismissedCoordinator]
         for coordinator in coordinators {
             for (scheme, typeSize) in Self.displayConfigurations {
-                let view = PracticeCoachingCard(
-                    coordinator: coordinator,
-                    isActiveTake: false,
-                    isAccessibilitySize: typeSize.isAccessibilitySize
-                )
-                .environment(\.colorScheme, scheme)
-                .environment(\.dynamicTypeSize, typeSize)
-                assertRendersNonZero(view)
+                for mode in [PracticeMode.fullScript, PracticeMode.memory, PracticeMode.cueWords] {
+                    let view = PracticeCoachingCard(
+                        coordinator: coordinator,
+                        practiceMode: mode,
+                        isScriptRevealed: false,
+                        sectionExactPhrase: seeded.section.exactPhrase,
+                        handoffCueText: nil,
+                        isActiveTake: false,
+                        isAccessibilitySize: typeSize.isAccessibilitySize,
+                        onRevealScript: {}
+                    )
+                    .environment(\.colorScheme, scheme)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    assertRendersNonZero(view)
+                }
             }
         }
     }
