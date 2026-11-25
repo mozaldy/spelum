@@ -138,7 +138,7 @@ struct TakeReviewAnalysisResultContent: View {
                     "\(result.recognizedWordCount) recognized \(wordLabel) over \(accessibleDuration)"
             )
         }
-        let reason = "Omitted because finalized non-overlapping word timing was unavailable."
+        let reason = "There is too little reliable transcript timing to estimate a speaking pace."
         return PaceSummaryText(value: "Not Estimated", caption: reason, accessibleValue: "Not estimated. \(reason)")
     }
 }
