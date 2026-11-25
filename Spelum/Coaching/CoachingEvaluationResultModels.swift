@@ -45,9 +45,9 @@ nonisolated enum ColdLatencyMeasurementStatus: String, Codable, Equatable, Hasha
     var displayLabel: String {
         switch self {
         case .verifiedColdLaunch:
-            "Verified cold launch"
+            "First evaluation request after app launch"
         case .processAlreadyWarmed:
-            "Unmeasured (app already warmed — relaunch app for cold check)"
+            "Unmeasured (an evaluation already started during this launch)"
         case .firstCallFailed:
             "Unmeasured (first model call failed or fell back)"
         case .modelUnavailable:

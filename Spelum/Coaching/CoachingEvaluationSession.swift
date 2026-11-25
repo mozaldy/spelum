@@ -275,7 +275,7 @@ nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, 
         - Safety Violations (On-Device): \(safetyLine)
         - Abstention Accuracy (Non-Fallback Model): \(abstentionLine)
         - Model Fallbacks to Authored: \(stats.modelFallbackCount)/\(stats.totalCases) (Validation Failures: \(stats.modelValidationFailureCount))
-        - Latency: Cold \(coldText) | Warm Median \(warmMedText)
+        - Latency: First request after launch \(coldText) | Subsequent median \(warmMedText)
         - Repeated Variation: Technique Agreement \(repeatTechText) | Mean Token Similarity \(repeatSimText)
         """
     }

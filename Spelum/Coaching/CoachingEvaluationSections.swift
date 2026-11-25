@@ -48,18 +48,18 @@ struct CoachingEvaluationResultsSections: View {
         }
 
         Section("Latency & Repeated Variation") {
-            LabeledContent("Cold Model Latency") {
+            LabeledContent("First Request After Launch") {
                 Text(Self.formatCold(stats.coldLatencyMilliseconds, status: stats.coldLatencyStatus))
                     .font(.footnote.monospacedDigit())
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Warm Median Latency") {
+            LabeledContent("Subsequent Requests (Median)") {
                 Text(Self.formatMS(stats.warmMedianLatencyMilliseconds))
                     .font(.footnote.monospacedDigit())
             }
             if let minMS = stats.warmMinLatencyMilliseconds,
                let maxMS = stats.warmMaxLatencyMilliseconds {
-                LabeledContent("Warm Range") {
+                LabeledContent("Subsequent Requests (Range)") {
                     Text("\(Self.formatMS(minMS)) – \(Self.formatMS(maxMS))")
                         .font(.footnote.monospacedDigit())
                 }
@@ -80,7 +80,7 @@ struct CoachingEvaluationResultsSections: View {
 
     static func formatCold(_ value: Double?, status: ColdLatencyMeasurementStatus) -> String {
         if let value, status == .verifiedColdLaunch {
-            return String(format: "%.0f ms (Verified Cold)", value)
+            return String(format: "%.0f ms", value)
         }
         return status.displayLabel
     }
