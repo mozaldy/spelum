@@ -22,28 +22,34 @@ extension PresentationStore {
         }
 
         let existing = sections[targetIndex]
-        let now = Date()
-        let newSectionRevision = makeSectionRevision(
-            from: draft,
-            sectionID: existing.sectionID,
-            fallbackTitle: existing.title,
-            timestamp: now,
-            presentation: presentation
-        )
+        let origin: HandoffTransitionOrigin = targetIndex == 0
+            ? .opening
+            : .fromSection(sections[targetIndex - 1].sectionID)
 
-        var updatedSections = sections
-        updatedSections[targetIndex] = newSectionRevision
+        return try performAtomicWrite {
+            let now = Date()
+            let newSectionRevision = makeSectionRevision(
+                from: draft,
+                sectionID: existing.sectionID,
+                fallbackTitle: existing.title,
+                handoffOrigin: origin,
+                timestamp: now,
+                presentation: presentation
+            )
 
-        presentation.sectionRevisions.append(newSectionRevision)
-        modelContext.insert(newSectionRevision)
+            var updatedSections = sections
+            updatedSections[targetIndex] = newSectionRevision
+            presentation.sectionRevisions.append(newSectionRevision)
+            modelContext.insert(newSectionRevision)
 
-        return try appendTalkRevision(
-            to: presentation,
-            previousRevision: currentRevision,
-            orderedSections: updatedSections,
-            changeSummary: changeSummary,
-            timestamp: now
-        )
+            return appendTalkRevision(
+                to: presentation,
+                previousRevision: currentRevision,
+                orderedSections: updatedSections,
+                changeSummary: changeSummary,
+                timestamp: now
+            )
+        }
     }
 
     @discardableResult
@@ -51,47 +57,70 @@ extension PresentationStore {
         in presentation: PresentationRecord,
         sectionID: UUID,
         at splitIndex: String.Index,
-        pendingDraft: SectionDraft? = nil
+        pendingDraft: SectionDraft? = nil,
+        exactPhrasePolicy: ExactPhraseSplitPolicy = .protect
     ) throws -> SectionSplitResult {
         guard let currentRevision = currentTalkRevision(for: presentation) else {
             throw SectionEditError.presentationNotFound
         }
-
         let sections = orderedSections(in: currentRevision)
         guard let targetIndex = sections.firstIndex(where: { $0.sectionID == sectionID }) else {
             throw SectionEditError.sectionNotFound
         }
 
         let existing = sections[targetIndex]
-        let base = pendingDraft ?? SectionDraft(record: existing)
-        let (firstText, secondText) = try splitText(base.text, at: splitIndex)
-        let now = Date()
-        let (firstSection, secondSection) = makeSplitSections(
-            base: base,
-            existing: existing,
-            splitTexts: (firstText, secondText),
-            nextSectionNumber: sections.count + 1,
-            timestamp: now
+        let base = resolvedBaseDraft(pendingDraft: pendingDraft, existing: existing, in: currentRevision)
+        let splitTexts = try splitText(base.text, at: splitIndex)
+        let exactPhrases = try Self.partitionExactPhrase(
+            base.exactPhrase,
+            in: base.text,
+            at: splitIndex,
+            policy: exactPhrasePolicy
         )
+        let firstOrigin: HandoffTransitionOrigin = targetIndex == 0
+            ? .opening
+            : .fromSection(sections[targetIndex - 1].sectionID)
 
-        var updatedSections = sections
-        updatedSections.replaceSubrange(targetIndex ... targetIndex, with: [firstSection, secondSection])
-        presentation.sectionRevisions.append(contentsOf: [firstSection, secondSection])
-        modelContext.insert(firstSection)
-        modelContext.insert(secondSection)
+        return try performAtomicWrite {
+            let now = Date()
+            let (firstSection, secondSection) = makeSplitSections(
+                base: base,
+                existing: existing,
+                splitTexts: splitTexts,
+                exactPhrases: exactPhrases,
+                firstOrigin: firstOrigin,
+                nextSectionNumber: sections.count + 1,
+                timestamp: now,
+                presentation: presentation
+            )
+            var updatedSections = sections
+            updatedSections.replaceSubrange(targetIndex ... targetIndex, with: [firstSection, secondSection])
+            presentation.sectionRevisions.append(contentsOf: [firstSection, secondSection])
+            modelContext.insert(firstSection)
+            modelContext.insert(secondSection)
 
-        let newRevision = try appendTalkRevision(
-            to: presentation,
-            previousRevision: currentRevision,
-            orderedSections: updatedSections,
-            changeSummary: "Split \(firstSection.title)",
-            timestamp: now
-        )
-        return SectionSplitResult(
-            talkRevision: newRevision,
-            firstSection: firstSection,
-            secondSection: secondSection
-        )
+            rebindFollowerHandoffIfNeeded(
+                in: &updatedSections,
+                followerIndex: targetIndex + 2,
+                oldPredecessorID: existing.sectionID,
+                newPredecessorID: secondSection.sectionID,
+                previousRevision: currentRevision,
+                presentation: presentation,
+                timestamp: now
+            )
+            let newRevision = appendTalkRevision(
+                to: presentation,
+                previousRevision: currentRevision,
+                orderedSections: updatedSections,
+                changeSummary: "Split \(firstSection.title)",
+                timestamp: now
+            )
+            return SectionSplitResult(
+                talkRevision: newRevision,
+                firstSection: firstSection,
+                secondSection: secondSection
+            )
+        }
     }
 
     @discardableResult
@@ -122,12 +151,22 @@ extension PresentationStore {
             return currentRevision
         }
 
-        return try appendTalkRevision(
-            to: presentation,
-            previousRevision: currentRevision,
-            orderedSections: reordered,
-            changeSummary: "Reordered sections"
-        )
+        return try performAtomicWrite {
+            let now = Date()
+            let reconciled = reconcileHandoffOverrides(
+                for: reordered,
+                previousRevision: currentRevision,
+                presentation: presentation,
+                timestamp: now
+            )
+            return appendTalkRevision(
+                to: presentation,
+                previousRevision: currentRevision,
+                orderedSections: reconciled,
+                changeSummary: "Reordered sections",
+                timestamp: now
+            )
+        }
     }
 
     @discardableResult
@@ -148,12 +187,22 @@ extension PresentationStore {
         }
 
         let remaining = currentSections.filter { $0.sectionID != sectionID }
-        return try appendTalkRevision(
-            to: presentation,
-            previousRevision: currentRevision,
-            orderedSections: remaining,
-            changeSummary: "Removed \(target.title)"
-        )
+        return try performAtomicWrite {
+            let now = Date()
+            let reconciled = reconcileHandoffOverrides(
+                for: remaining,
+                previousRevision: currentRevision,
+                presentation: presentation,
+                timestamp: now
+            )
+            return appendTalkRevision(
+                to: presentation,
+                previousRevision: currentRevision,
+                orderedSections: reconciled,
+                changeSummary: "Removed \(target.title)",
+                timestamp: now
+            )
+        }
     }
 
     @discardableResult
@@ -170,31 +219,51 @@ extension PresentationStore {
             return currentRevision
         }
 
-        presentation.title = trimmed
-        return try appendTalkRevision(
-            to: presentation,
-            previousRevision: currentRevision,
-            orderedSections: orderedSections(in: currentRevision),
-            changeSummary: "Renamed presentation"
-        )
+        return try performAtomicWrite {
+            presentation.title = trimmed
+            return appendTalkRevision(
+                to: presentation,
+                previousRevision: currentRevision,
+                orderedSections: orderedSections(in: currentRevision),
+                changeSummary: "Renamed presentation"
+            )
+        }
     }
 
     func deletePresentation(_ presentation: PresentationRecord) throws {
-        modelContext.delete(presentation)
-        try modelContext.save()
+        try performAtomicWrite {
+            modelContext.delete(presentation)
+        }
     }
 }
 
 private extension PresentationStore {
+    func resolvedBaseDraft(
+        pendingDraft: SectionDraft?,
+        existing: SectionRevisionRecord,
+        in talkRevision: TalkRevisionRecord
+    ) -> SectionDraft {
+        if let pendingDraft {
+            return pendingDraft
+        }
+        var draft = SectionDraft(record: existing)
+        draft.handoffCueOverride = handoffContext(forSectionID: existing.sectionID, in: talkRevision)?.customCue
+        return draft
+    }
+
+    // swiftlint:disable:next function_parameter_count
     func makeSplitSections(
         base: SectionDraft,
         existing: SectionRevisionRecord,
         splitTexts: (String, String),
+        exactPhrases: (String?, String?),
+        firstOrigin: HandoffTransitionOrigin,
         nextSectionNumber: Int,
-        timestamp: Date
+        timestamp: Date,
+        presentation: PresentationRecord
     ) -> (SectionRevisionRecord, SectionRevisionRecord) {
-        let (firstExact, secondExact) = partitionExactPhrase(
-            base.exactPhrase,
+        let (firstCues, secondCues) = Self.partitionCueWords(
+            base.cueWords,
             firstText: splitTexts.0,
             secondText: splitTexts.1
         )
@@ -205,8 +274,8 @@ private extension PresentationStore {
             speaker: base.speaker,
             speakerRole: base.speakerRole,
             purpose: base.purpose,
-            cueWords: base.cueWords,
-            exactPhrase: firstExact,
+            cueWords: firstCues,
+            exactPhrase: exactPhrases.0,
             handoffCueOverride: base.handoffCueOverride
         )
         let secondDraft = SectionDraft(
@@ -215,61 +284,42 @@ private extension PresentationStore {
             speaker: base.speaker,
             speakerRole: base.speakerRole,
             purpose: .general,
-            cueWords: [],
-            exactPhrase: secondExact,
+            cueWords: secondCues,
+            exactPhrase: exactPhrases.1,
             handoffCueOverride: nil
         )
         let first = makeSectionRevision(
             from: firstDraft,
             sectionID: existing.sectionID,
             fallbackTitle: existing.title,
+            handoffOrigin: firstOrigin,
             timestamp: timestamp,
-            presentation: existing.presentation
+            presentation: presentation
         )
         let second = makeSectionRevision(
             from: secondDraft,
             sectionID: UUID(),
             fallbackTitle: nextTitle,
+            handoffOrigin: .fromSection(first.sectionID),
             timestamp: timestamp,
-            presentation: existing.presentation
+            presentation: presentation
         )
         return (first, second)
     }
 
     func splitText(_ sourceText: String, at splitIndex: String.Index) throws -> (String, String) {
-        guard splitIndex > sourceText.startIndex, splitIndex < sourceText.endIndex else {
+        guard Self.isValidSplitIndex(splitIndex, in: sourceText) else {
             throw SectionEditError.invalidSplitPosition
         }
-        let firstText = String(sourceText[..<splitIndex])
-        let secondText = String(sourceText[splitIndex...])
-        guard !firstText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !secondText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw SectionEditError.invalidSplitPosition
-        }
-        return (firstText, secondText)
+        return (String(sourceText[..<splitIndex]), String(sourceText[splitIndex...]))
     }
 
-    func partitionExactPhrase(
-        _ phrase: String?,
-        firstText: String,
-        secondText: String
-    ) -> (String?, String?) {
-        guard let normalized = Self.normalizedOptionalText(phrase, preserveOuterSpaces: true) else {
-            return (nil, nil)
-        }
-        if firstText.contains(normalized) {
-            return (normalized, nil)
-        }
-        if secondText.contains(normalized) {
-            return (nil, normalized)
-        }
-        return (nil, nil)
-    }
-
+    // swiftlint:disable:next function_parameter_count
     func makeSectionRevision(
         from draft: SectionDraft,
         sectionID: UUID,
         fallbackTitle: String,
+        handoffOrigin: HandoffTransitionOrigin,
         timestamp: Date,
         presentation: PresentationRecord?
     ) -> SectionRevisionRecord {
@@ -278,6 +328,23 @@ private extension PresentationStore {
         let cleanedCues = draft.cueWords
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        let normalizedOverride = Self.normalizedOptionalText(draft.handoffCueOverride)
+
+        let sourceSectionID: UUID?
+        let isOpening: Bool?
+        if normalizedOverride != nil {
+            switch handoffOrigin {
+            case .opening:
+                sourceSectionID = nil
+                isOpening = true
+            case .fromSection(let precedingID):
+                sourceSectionID = precedingID
+                isOpening = false
+            }
+        } else {
+            sourceSectionID = nil
+            isOpening = nil
+        }
 
         return SectionRevisionRecord(
             sectionID: sectionID,
@@ -288,7 +355,9 @@ private extension PresentationStore {
             purpose: draft.purpose,
             cueWords: cleanedCues,
             exactPhrase: Self.normalizedOptionalText(draft.exactPhrase, preserveOuterSpaces: true),
-            handoffCueOverride: Self.normalizedOptionalText(draft.handoffCueOverride),
+            handoffCueOverride: normalizedOverride,
+            handoffCueSourceSectionID: sourceSectionID,
+            handoffCueIsOpening: isOpening,
             createdAt: timestamp,
             presentation: presentation
         )
@@ -300,7 +369,7 @@ private extension PresentationStore {
         orderedSections: [SectionRevisionRecord],
         changeSummary: String,
         timestamp: Date = Date()
-    ) throws -> TalkRevisionRecord {
+    ) -> TalkRevisionRecord {
         let newRevision = TalkRevisionRecord(
             revisionNumber: previousRevision.revisionNumber + 1,
             title: presentation.title,
@@ -324,8 +393,6 @@ private extension PresentationStore {
         presentation.talkRevisions.append(newRevision)
         presentation.currentRevisionID = newRevision.id
         presentation.updatedAt = timestamp
-        try modelContext.save()
-
         return newRevision
     }
 }

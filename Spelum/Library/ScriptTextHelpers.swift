@@ -99,4 +99,103 @@ extension PresentationStore {
         let normalizedName = section.speaker.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return "\(section.speakerRole.rawValue)::\(normalizedName)"
     }
+
+    static func isValidSplitIndex(_ splitIndex: String.Index, in text: String) -> Bool {
+        guard splitIndex > text.startIndex, splitIndex < text.endIndex else {
+            return false
+        }
+        let before = text[..<splitIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = text[splitIndex...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return !before.isEmpty && !after.isEmpty
+    }
+
+    static func exactPhraseSplitConflict(
+        in text: String,
+        exactPhrase: String?,
+        at splitIndex: String.Index
+    ) -> ExactPhraseSplitConflict? {
+        guard isValidSplitIndex(splitIndex, in: text),
+              let normalized = normalizedOptionalText(exactPhrase, preserveOuterSpaces: true) else {
+            return nil
+        }
+
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchedPhrase: String
+        if text.contains(normalized) {
+            matchedPhrase = normalized
+        } else if text.contains(trimmed) {
+            matchedPhrase = trimmed
+        } else {
+            return nil
+        }
+
+        let firstText = String(text[..<splitIndex])
+        let secondText = String(text[splitIndex...])
+        if firstText.contains(matchedPhrase) || secondText.contains(matchedPhrase) {
+            return nil
+        }
+
+        guard let phraseRange = text.range(of: matchedPhrase) else {
+            return nil
+        }
+        let beforeIndex = isValidSplitIndex(phraseRange.lowerBound, in: text) ? phraseRange.lowerBound : nil
+        let afterIndex = isValidSplitIndex(phraseRange.upperBound, in: text) ? phraseRange.upperBound : nil
+        return ExactPhraseSplitConflict(
+            phrase: normalized,
+            beforePhraseSplitIndex: beforeIndex,
+            afterPhraseSplitIndex: afterIndex
+        )
+    }
+
+    static func partitionExactPhrase(
+        _ phrase: String?,
+        in originalText: String,
+        at splitIndex: String.Index,
+        policy: ExactPhraseSplitPolicy
+    ) throws -> (String?, String?) {
+        guard let normalized = normalizedOptionalText(phrase, preserveOuterSpaces: true) else {
+            return (nil, nil)
+        }
+        let firstText = String(originalText[..<splitIndex])
+        let secondText = String(originalText[splitIndex...])
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if firstText.contains(normalized) || firstText.contains(trimmed) {
+            return (normalized, nil)
+        }
+        if secondText.contains(normalized) || secondText.contains(trimmed) {
+            return (nil, normalized)
+        }
+        if exactPhraseSplitConflict(in: originalText, exactPhrase: normalized, at: splitIndex) != nil {
+            switch policy {
+            case .protect:
+                throw SectionEditError.splitCrossesExactPhrase
+            case .clearExactPhrase:
+                return (nil, nil)
+            }
+        }
+        // Phrase was not verbatim in original text; preserve it on the first section rather than dropping it.
+        return (normalized, nil)
+    }
+
+    static func partitionCueWords(
+        _ cueWords: [String],
+        firstText: String,
+        secondText: String
+    ) -> ([String], [String]) {
+        var firstCues: [String] = []
+        var secondCues: [String] = []
+        for rawCue in cueWords {
+            let cue = rawCue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cue.isEmpty else { continue }
+            let inFirst = firstText.localizedCaseInsensitiveContains(cue)
+            let inSecond = secondText.localizedCaseInsensitiveContains(cue)
+            if inSecond && !inFirst {
+                secondCues.append(cue)
+            } else {
+                firstCues.append(cue)
+            }
+        }
+        return (firstCues, secondCues)
+    }
 }

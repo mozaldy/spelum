@@ -11,20 +11,34 @@ final class PresentationStore {
     ])
 
     let modelContext: ModelContext
+    private let saveContext: (ModelContext) throws -> Void
 
-    init(modelContext: ModelContext) {
+    init(
+        modelContext: ModelContext,
+        saveContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.modelContext = modelContext
+        self.saveContext = saveContext
     }
 
     static func makeModelContainer(
         storeURL: URL? = nil,
-        inMemory: Bool = false
+        inMemory: Bool = false,
+        allowsSave: Bool = true
     ) throws -> ModelContainer {
         let configuration: ModelConfiguration
         if inMemory {
-            configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            configuration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                allowsSave: allowsSave
+            )
         } else if let storeURL {
-            configuration = ModelConfiguration(schema: schema, url: storeURL)
+            configuration = ModelConfiguration(
+                schema: schema,
+                url: storeURL,
+                allowsSave: allowsSave
+            )
         } else {
             let appSupport = try FileManager.default.url(
                 for: .applicationSupportDirectory,
@@ -35,7 +49,11 @@ final class PresentationStore {
             let storeDirectory = appSupport.appendingPathComponent("Spelum", isDirectory: true)
             try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
             let defaultURL = storeDirectory.appendingPathComponent("spelum.sqlite")
-            configuration = ModelConfiguration(schema: schema, url: defaultURL)
+            configuration = ModelConfiguration(
+                schema: schema,
+                url: defaultURL,
+                allowsSave: allowsSave
+            )
         }
         return try ModelContainer(for: schema, configurations: [configuration])
     }
@@ -50,30 +68,42 @@ final class PresentationStore {
     }
 
     func presentation(withID id: UUID) throws -> PresentationRecord? {
+        try presentation(withID: id, in: modelContext)
+    }
+
+    func presentation(withID id: UUID, in context: ModelContext) throws -> PresentationRecord? {
         let descriptor = FetchDescriptor<PresentationRecord>(
             predicate: #Predicate<PresentationRecord> { record in
                 record.id == id
             }
         )
-        return try modelContext.fetch(descriptor).first
+        return try context.fetch(descriptor).first
     }
 
     func talkRevision(withID id: UUID) throws -> TalkRevisionRecord? {
+        try talkRevision(withID: id, in: modelContext)
+    }
+
+    func talkRevision(withID id: UUID, in context: ModelContext) throws -> TalkRevisionRecord? {
         let descriptor = FetchDescriptor<TalkRevisionRecord>(
             predicate: #Predicate<TalkRevisionRecord> { record in
                 record.id == id
             }
         )
-        return try modelContext.fetch(descriptor).first
+        return try context.fetch(descriptor).first
     }
 
     func sectionRevision(withID id: UUID) throws -> SectionRevisionRecord? {
+        try sectionRevision(withID: id, in: modelContext)
+    }
+
+    func sectionRevision(withID id: UUID, in context: ModelContext) throws -> SectionRevisionRecord? {
         let descriptor = FetchDescriptor<SectionRevisionRecord>(
             predicate: #Predicate<SectionRevisionRecord> { record in
                 record.revisionID == id
             }
         )
-        return try modelContext.fetch(descriptor).first
+        return try context.fetch(descriptor).first
     }
 
     func currentTalkRevision(for presentation: PresentationRecord) -> TalkRevisionRecord? {
@@ -126,66 +156,22 @@ final class PresentationStore {
         return ordered
     }
 
-    func handoffContext(
-        forSectionID sectionID: UUID,
-        in presentation: PresentationRecord
-    ) -> HandoffContext? {
-        guard let revision = currentTalkRevision(for: presentation) else {
-            return nil
+    // MARK: - Atomic Transaction Boundary
+
+    func performAtomicWrite<Result>(_ body: () throws -> Result) throws -> Result {
+        let previousAutosave = modelContext.autosaveEnabled
+        modelContext.autosaveEnabled = false
+        defer { modelContext.autosaveEnabled = previousAutosave }
+
+        do {
+            let result = try body()
+            try saveContext(modelContext)
+            return result
+        } catch {
+            modelContext.processPendingChanges()
+            modelContext.rollback()
+            throw error
         }
-        return handoffContext(forSectionID: sectionID, in: revision)
-    }
-
-    func handoffContext(
-        forSectionID sectionID: UUID,
-        in talkRevision: TalkRevisionRecord
-    ) -> HandoffContext? {
-        let sections = orderedSections(in: talkRevision)
-        guard let index = sections.firstIndex(where: { $0.sectionID == sectionID }) else {
-            return nil
-        }
-
-        let current = sections[index]
-        let isSingleSpeakerTalk = Set(sections.map(Self.normalizedSpeakerKey)).count <= 1
-        let customCue = Self.normalizedOptionalText(current.handoffCueOverride)
-
-        guard index > 0 else {
-            return HandoffContext(
-                sectionID: current.sectionID,
-                sectionIndex: index,
-                precedingSectionID: nil,
-                precedingSectionTitle: nil,
-                precedingSpeaker: nil,
-                precedingSpeakerRole: nil,
-                derivedFinalLine: nil,
-                customCue: customCue,
-                effectiveCueText: customCue,
-                isCustomCue: customCue != nil,
-                isFirstSection: true,
-                isSpeakerChange: false,
-                isSingleSpeakerTalk: isSingleSpeakerTalk
-            )
-        }
-
-        let preceding = sections[index - 1]
-        let derivedLine = Self.finalNonEmptyLine(in: preceding.text)
-        let isSpeakerChange = Self.normalizedSpeakerKey(preceding) != Self.normalizedSpeakerKey(current)
-
-        return HandoffContext(
-            sectionID: current.sectionID,
-            sectionIndex: index,
-            precedingSectionID: preceding.sectionID,
-            precedingSectionTitle: preceding.title,
-            precedingSpeaker: preceding.speaker,
-            precedingSpeakerRole: preceding.speakerRole,
-            derivedFinalLine: derivedLine,
-            customCue: customCue,
-            effectiveCueText: customCue ?? derivedLine,
-            isCustomCue: customCue != nil,
-            isFirstSection: false,
-            isSpeakerChange: isSpeakerChange,
-            isSingleSpeakerTalk: isSingleSpeakerTalk
-        )
     }
 
     // MARK: - Unified Import Path
@@ -196,49 +182,49 @@ final class PresentationStore {
             throw PresentationImportError.emptyScript
         }
 
-        let now = Date()
-        let resolvedTitle = Self.resolvedTitle(explicit: title, fallbackText: text)
-        let presentation = PresentationRecord(
-            title: resolvedTitle,
-            sourceText: text,
-            createdAt: now,
-            updatedAt: now
-        )
-        let initialSection = SectionRevisionRecord(
-            title: "Section 1",
-            text: text,
-            speaker: SpeakerRole.presenter.displayName,
-            speakerRole: .presenter,
-            purpose: .general,
-            createdAt: now,
-            presentation: presentation
-        )
-        let initialRevision = TalkRevisionRecord(
-            revisionNumber: 1,
-            title: resolvedTitle,
-            changeSummary: "Imported script",
-            createdAt: now,
-            presentation: presentation
-        )
-        let entry = TalkRevisionEntryRecord(
-            orderIndex: 0,
-            sectionRevisionID: initialSection.revisionID,
-            talkRevision: initialRevision,
-            sectionRevision: initialSection
-        )
+        return try performAtomicWrite {
+            let now = Date()
+            let resolvedTitle = Self.resolvedTitle(explicit: title, fallbackText: text)
+            let presentation = PresentationRecord(
+                title: resolvedTitle,
+                sourceText: text,
+                createdAt: now,
+                updatedAt: now
+            )
+            let initialSection = SectionRevisionRecord(
+                title: "Section 1",
+                text: text,
+                speaker: SpeakerRole.presenter.displayName,
+                speakerRole: .presenter,
+                purpose: .general,
+                createdAt: now,
+                presentation: presentation
+            )
+            let initialRevision = TalkRevisionRecord(
+                revisionNumber: 1,
+                title: resolvedTitle,
+                changeSummary: "Imported script",
+                createdAt: now,
+                presentation: presentation
+            )
+            let entry = TalkRevisionEntryRecord(
+                orderIndex: 0,
+                sectionRevisionID: initialSection.revisionID,
+                talkRevision: initialRevision,
+                sectionRevision: initialSection
+            )
 
-        initialRevision.entries.append(entry)
-        presentation.sectionRevisions.append(initialSection)
-        presentation.talkRevisions.append(initialRevision)
-        presentation.currentRevisionID = initialRevision.id
+            initialRevision.entries.append(entry)
+            presentation.sectionRevisions.append(initialSection)
+            presentation.talkRevisions.append(initialRevision)
+            presentation.currentRevisionID = initialRevision.id
 
-        modelContext.insert(presentation)
-        modelContext.insert(initialSection)
-        modelContext.insert(initialRevision)
-        modelContext.insert(entry)
-        try modelContext.save()
-
-        return presentation
+            modelContext.insert(presentation)
+            modelContext.insert(initialSection)
+            modelContext.insert(initialRevision)
+            modelContext.insert(entry)
+            return presentation
+        }
     }
 
     @discardableResult

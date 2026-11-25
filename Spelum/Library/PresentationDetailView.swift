@@ -12,6 +12,7 @@ struct PresentationDetailView: View {
     @State private var showingOriginalScript = false
     @State private var showingRenameAlert = false
     @State private var renameDraft = ""
+    @State private var pendingFailedRename: String?
     @State private var sectionPendingDelete: SectionRevisionRecord?
     @State private var errorMessage: String?
 
@@ -40,8 +41,19 @@ struct PresentationDetailView: View {
         List {
             if let errorMessage {
                 Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("detailErrorLabel")
+                        if let pendingFailedRename {
+                            Button("Retry Rename to “\(pendingFailedRename)”") {
+                                renameDraft = pendingFailedRename
+                                renamePresentation()
+                            }
+                            .font(.callout)
+                            .accessibilityIdentifier("retryRenameButton")
+                        }
+                    }
                 }
             }
 
@@ -59,7 +71,7 @@ struct PresentationDetailView: View {
                 }
                 Menu {
                     Button {
-                        renameDraft = presentation.title
+                        renameDraft = pendingFailedRename ?? presentation.title
                         showingRenameAlert = true
                     } label: {
                         Label("Rename Presentation", systemImage: "pencil")
@@ -212,9 +224,14 @@ struct PresentationDetailView: View {
 
     private func renamePresentation() {
         errorMessage = nil
+        let attemptedTitle = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             _ = try store.renamePresentation(presentation, to: renameDraft)
+            pendingFailedRename = nil
         } catch {
+            if !attemptedTitle.isEmpty {
+                pendingFailedRename = attemptedTitle
+            }
             errorMessage = error.localizedDescription
         }
     }

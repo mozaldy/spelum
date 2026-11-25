@@ -74,6 +74,7 @@ enum SectionEditError: LocalizedError, Equatable, Sendable {
     case sectionNotFound
     case emptySectionText
     case invalidSplitPosition
+    case splitCrossesExactPhrase
     case cannotDeleteLastSection
 
     var errorDescription: String? {
@@ -86,9 +87,71 @@ enum SectionEditError: LocalizedError, Equatable, Sendable {
             "Section text cannot be empty."
         case .invalidSplitPosition:
             "Choose a split point with text on both sides."
+        case .splitCrossesExactPhrase:
+            "This split point cuts through your marked exact phrase. " +
+            "Move the split before or after the phrase, or confirm clearing it."
         case .cannotDeleteLastSection:
             "A presentation must keep at least one section."
         }
+    }
+}
+
+enum ExactPhraseSplitPolicy: Equatable, Sendable {
+    case protect
+    case clearExactPhrase
+}
+
+struct ExactPhraseSplitConflict: Equatable, Sendable {
+    let phrase: String
+    let beforePhraseSplitIndex: String.Index?
+    let afterPhraseSplitIndex: String.Index?
+}
+
+enum HandoffTransitionOrigin: Equatable, Sendable {
+    case opening
+    case fromSection(UUID)
+}
+
+struct EditableCueWord: Identifiable, Equatable, Sendable {
+    let id: UUID
+    var text: String
+
+    init(id: UUID = UUID(), text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
+enum CueWordListHelper {
+    static func updateText(_ newText: String, for id: UUID, in items: inout [EditableCueWord]) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].text = newText
+    }
+
+    static func remove(id: UUID, from items: inout [EditableCueWord], focusedID: inout UUID?) {
+        if focusedID == id {
+            focusedID = nil
+        }
+        items.removeAll { $0.id == id }
+    }
+
+    static func remove(at offsets: IndexSet, from items: inout [EditableCueWord], focusedID: inout UUID?) {
+        let removedIDs = Set(offsets.compactMap { items.indices.contains($0) ? items[$0].id : nil })
+        if let currentFocus = focusedID, removedIDs.contains(currentFocus) {
+            focusedID = nil
+        }
+        items = items.enumerated().compactMap { offsets.contains($0.offset) ? nil : $0.element }
+    }
+
+    static func cleanedCueWords(from items: [EditableCueWord], pendingNewWord: String = "") -> [String] {
+        var cleaned = items
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let trimmedPending = pendingNewWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPending.isEmpty {
+            cleaned.append(trimmedPending)
+        }
+        return cleaned
     }
 }
 
@@ -266,6 +329,8 @@ final class SectionRevisionRecord {
     var cueWordsData: Data
     var exactPhrase: String?
     var handoffCueOverride: String?
+    var handoffCueSourceSectionID: UUID?
+    var handoffCueIsOpening: Bool?
     var createdAt: Date
     var presentation: PresentationRecord?
 
@@ -280,6 +345,8 @@ final class SectionRevisionRecord {
         cueWords: [String] = [],
         exactPhrase: String? = nil,
         handoffCueOverride: String? = nil,
+        handoffCueSourceSectionID: UUID? = nil,
+        handoffCueIsOpening: Bool? = nil,
         createdAt: Date = Date(),
         presentation: PresentationRecord? = nil
     ) {
@@ -293,6 +360,8 @@ final class SectionRevisionRecord {
         self.cueWordsData = Self.encodeCueWords(cueWords)
         self.exactPhrase = exactPhrase
         self.handoffCueOverride = handoffCueOverride
+        self.handoffCueSourceSectionID = handoffCueSourceSectionID
+        self.handoffCueIsOpening = handoffCueIsOpening
         self.createdAt = createdAt
         self.presentation = presentation
     }

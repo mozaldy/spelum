@@ -81,6 +81,16 @@ struct ScriptEditorScriptSection: View {
                 .accessibilityLabel("Section script text")
                 .accessibilityIdentifier("sectionScriptTextEditor")
 
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Label(
+                    SectionEditError.emptySectionText.localizedDescription,
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("sectionTextValidationError")
+            }
+
             Button(action: onSplitAtCursor) {
                 Label("Split at Cursor", systemImage: "scissors")
             }
@@ -142,33 +152,36 @@ struct ScriptEditorExactPhraseSection: View {
 }
 
 struct ScriptEditorCueWordsSection: View {
-    @Binding var cueWords: [String]
+    @Binding var cueWords: [EditableCueWord]
     @Binding var newCueWord: String
+    @FocusState private var focusedCueID: UUID?
 
     var body: some View {
         Section {
-            ForEach(Array(cueWords.indices), id: \.self) { index in
+            ForEach(cueWords) { item in
+                let position = (cueWords.firstIndex(where: { $0.id == item.id }) ?? 0) + 1
                 HStack {
-                    TextField(
-                        "Cue word",
-                        text: Binding(
-                            get: { cueWords[index] },
-                            set: { cueWords[index] = $0 }
-                        )
-                    )
-                    .accessibilityLabel("Cue word \(index + 1)")
+                    TextField("Cue word", text: textBinding(for: item.id))
+                        .focused($focusedCueID, equals: item.id)
+                        .accessibilityLabel("Cue word \(position)")
+                        .accessibilityIdentifier("cueWordField_\(position)")
 
                     Button(role: .destructive) {
-                        cueWords.remove(at: index)
+                        var currentFocus = focusedCueID
+                        CueWordListHelper.remove(id: item.id, from: &cueWords, focusedID: &currentFocus)
+                        focusedCueID = currentFocus
                     } label: {
                         Image(systemName: "minus.circle.fill")
                     }
                     .buttonStyle(.borderless)
-                    .accessibilityLabel("Remove cue \(cueWords[index])")
+                    .accessibilityLabel("Remove cue \(item.text)")
+                    .accessibilityIdentifier("removeCueWordButton_\(position)")
                 }
             }
             .onDelete { offsets in
-                cueWords.remove(atOffsets: offsets)
+                var currentFocus = focusedCueID
+                CueWordListHelper.remove(at: offsets, from: &cueWords, focusedID: &currentFocus)
+                focusedCueID = currentFocus
             }
 
             HStack {
@@ -184,14 +197,26 @@ struct ScriptEditorCueWordsSection: View {
         } header: {
             Text("Cue Words")
         } footer: {
-            Text("Short memory triggers for this section. Saved on each new revision.")
+            Text(
+                "Short memory triggers for this section. When splitting, cue words matching " +
+                "the second half move there automatically."
+            )
         }
+    }
+
+    private func textBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { cueWords.first { $0.id == id }?.text ?? "" },
+            set: { newValue in
+                CueWordListHelper.updateText(newValue, for: id, in: &cueWords)
+            }
+        )
     }
 
     private func addCueWord() {
         let trimmed = newCueWord.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        cueWords.append(trimmed)
+        cueWords.append(EditableCueWord(text: trimmed))
         newCueWord = ""
     }
 }

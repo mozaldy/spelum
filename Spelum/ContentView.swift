@@ -102,6 +102,7 @@ struct ContentView: View {
                 Section {
                     Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
+                        .accessibilityIdentifier("libraryErrorLabel")
                 }
             }
 

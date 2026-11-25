@@ -11,31 +11,40 @@ struct ImportScriptSheet: View {
     @State private var draftTitle = ""
     @State private var draftText = ""
     @State private var showingFileImporter = false
+    @State private var showingDiscardConfirmation = false
     @State private var errorMessage: String?
+
+    private var isScriptTextValid: Bool {
+        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasPendingInput: Bool {
+        !draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isScriptTextValid
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                titleSection
-                fileImportSection
-                pasteScriptSection
                 if let errorMessage {
                     errorSection(errorMessage)
                 }
+                titleSection
+                fileImportSection
+                pasteScriptSection
             }
             .navigationTitle("Import Script")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        dismiss()
+                        requestCancel()
                     }
+                    .accessibilityIdentifier("cancelImportButton")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Import") {
                         importPastedText()
                     }
-                    .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("confirmImportButton")
                 }
             }
@@ -46,12 +55,34 @@ struct ImportScriptSheet: View {
             ) { result in
                 handleFileImport(result)
             }
+            .confirmationDialog(
+                "You have an unsaved script draft.",
+                isPresented: $showingDiscardConfirmation,
+                titleVisibility: .visible
+            ) {
+                if isScriptTextValid {
+                    Button("Import Script") {
+                        importPastedText()
+                    }
+                }
+                Button("Discard Draft", role: .destructive) {
+                    dismiss()
+                }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                if isScriptTextValid {
+                    Text("Import this script now, discard your draft, or keep editing.")
+                } else {
+                    Text("Add script text before importing, or discard your draft.")
+                }
+            }
             .onChange(of: draftText) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     errorMessage = nil
                 }
             }
         }
+        .interactiveDismissDisabled(hasPendingInput)
     }
 
     private var titleSection: some View {
@@ -94,6 +125,16 @@ struct ImportScriptSheet: View {
                 .frame(minHeight: 200)
                 .accessibilityLabel("Script text")
                 .accessibilityIdentifier("importScriptTextEditor")
+
+            if !draftText.isEmpty && !isScriptTextValid {
+                Label(
+                    PresentationImportError.emptyScript.localizedDescription,
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("importTextValidationError")
+            }
         } header: {
             Text("Paste or Type Script")
         } footer: {
@@ -106,6 +147,14 @@ struct ImportScriptSheet: View {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
                 .accessibilityIdentifier("importErrorLabel")
+        }
+    }
+
+    private func requestCancel() {
+        if hasPendingInput {
+            showingDiscardConfirmation = true
+        } else {
+            dismiss()
         }
     }
 

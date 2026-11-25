@@ -48,7 +48,24 @@ struct LineSplitPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let options: [LineSplitOption]
+    let sourceText: String
+    let exactPhrase: String?
+    let cueWordCount: Int
     let onSelect: (String.Index) -> Void
+
+    init(
+        options: [LineSplitOption],
+        sourceText: String = "",
+        exactPhrase: String? = nil,
+        cueWordCount: Int = 0,
+        onSelect: @escaping (String.Index) -> Void
+    ) {
+        self.options = options
+        self.sourceText = sourceText
+        self.exactPhrase = exactPhrase
+        self.cueWordCount = cueWordCount
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         NavigationStack {
@@ -60,28 +77,19 @@ struct LineSplitPickerSheet: View {
                         description: Text("Add a new line or place the cursor in the script to split.")
                     )
                 } else {
-                    List(options) { option in
-                        Button {
-                            onSelect(option.splitIndex)
-                            dismiss()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Split before line \(option.lineNumber)")
-                                    .font(.headline)
-                                    .foregroundStyle(.primary)
-                                Text("Ends section 1: \(option.beforePreview)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                Text("Starts section 2: \(option.afterPreview)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.tint)
-                                    .lineLimit(2)
+                    List {
+                        Section {
+                            ForEach(options) { option in
+                                splitOptionRow(option)
                             }
-                            .padding(.vertical, 4)
+                        } footer: {
+                            if cueWordCount > 0 {
+                                Text(
+                                    "Cue words matching the second half move there automatically; " +
+                                    "other cue words stay in the first section."
+                                )
+                            }
                         }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("splitOptionLine\(option.lineNumber)")
                     }
                 }
             }
@@ -95,6 +103,41 @@ struct LineSplitPickerSheet: View {
                 }
             }
         }
+    }
+
+    private func splitOptionRow(_ option: LineSplitOption) -> some View {
+        let crossesExactPhrase = PresentationStore.exactPhraseSplitConflict(
+            in: sourceText,
+            exactPhrase: exactPhrase,
+            at: option.splitIndex
+        ) != nil
+
+        return Button {
+            onSelect(option.splitIndex)
+            dismiss()
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Split before line \(option.lineNumber)")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text("Ends section 1: \(option.beforePreview)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Text("Starts section 2: \(option.afterPreview)")
+                    .font(.footnote)
+                    .foregroundStyle(.tint)
+                    .lineLimit(2)
+                if crossesExactPhrase {
+                    Label("Cuts through marked exact phrase", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("splitOptionLine\(option.lineNumber)")
     }
 }
 

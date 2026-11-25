@@ -21,7 +21,8 @@ struct RevisionHistorySheet: View {
                 NavigationLink {
                     RevisionSnapshotView(
                         revision: revision,
-                        sections: store.orderedSections(in: revision)
+                        sections: store.orderedSections(in: revision),
+                        store: store
                     )
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
@@ -64,6 +65,7 @@ struct RevisionHistorySheet: View {
 private struct RevisionSnapshotView: View {
     let revision: TalkRevisionRecord
     let sections: [SectionRevisionRecord]
+    let store: PresentationStore
 
     var body: some View {
         List {
@@ -78,6 +80,7 @@ private struct RevisionSnapshotView: View {
             }
 
             ForEach(Array(sections.enumerated()), id: \.element.revisionID) { index, section in
+                let handoff = store.handoffContext(forSectionID: section.sectionID, in: revision)
                 Section("\(index + 1). \(section.title)") {
                     LabeledContent("Speaker", value: speakerSummary(for: section))
                     LabeledContent("Purpose", value: section.purpose.displayName)
@@ -87,7 +90,7 @@ private struct RevisionSnapshotView: View {
                     if !section.cueWords.isEmpty {
                         LabeledContent("Cue Words", value: section.cueWords.joined(separator: ", "))
                     }
-                    if let customCue = section.handoffCueOverride, !customCue.isEmpty {
+                    if let handoff, handoff.isCustomCue, let customCue = handoff.customCue {
                         LabeledContent("Custom Handoff", value: customCue)
                     }
                     Text(section.text)
