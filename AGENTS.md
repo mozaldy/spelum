@@ -164,4 +164,3 @@ The following steps live in App Store Connect / Xcode Cloud and must be configur
 2. **Start the manual Xcode Cloud build:** In **App Store Connect → Spelum → Xcode Cloud** (or Xcode), open the manual internal TestFlight workflow, start a build targeting `main`, and verify the run checks out the approved commit SHA.
 3. **Verify build processing independently:** In **App Store Connect → TestFlight → Builds**, confirm the build completes processing, clears export compliance automatically (`ITSAppUsesNonExemptEncryption = false`), and reaches **Ready to Test** for the internal group. Record the **commit SHA**, **marketing version**, **cloud build number**, and **processing status**.
 4. **Verify physical iPhone 17 install independently:** Install or update the build from the TestFlight app on the owner's iPhone 17, then rehearse a handoff, record and replay a take, and retry. Upload or App Store Connect processing alone leaves the install check pending.
-
