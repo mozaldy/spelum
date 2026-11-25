@@ -21,4 +21,11 @@ struct AppConfigurationTests {
         let executableName = Bundle.main.infoDictionary?["CFBundleExecutable"] as? String
         #expect(executableName == "Spelum")
     }
+
+    @Test("App bundle includes a microphone purpose string for offline rehearsal")
+    func microphoneUsageDescriptionIsConfigured() {
+        let purpose = Bundle.main.infoDictionary?["NSMicrophoneUsageDescription"] as? String
+        let trimmed = purpose?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        #expect(!trimmed.isEmpty)
+    }
 }

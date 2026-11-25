@@ -8,7 +8,10 @@ struct MyApp: App {
 
     init() {
         do {
-            self.modelContainer = try PresentationStore.makeModelContainer()
+            let container = try PresentationStore.makeModelContainer()
+            let attemptStore = AttemptStore(modelContext: container.mainContext)
+            _ = try? attemptStore.recoverUnfinishedAttempts()
+            self.modelContainer = container
             self.initializationError = nil
         } catch {
             self.modelContainer = nil

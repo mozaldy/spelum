@@ -7,7 +7,8 @@ final class PresentationStore {
         PresentationRecord.self,
         TalkRevisionRecord.self,
         TalkRevisionEntryRecord.self,
-        SectionRevisionRecord.self
+        SectionRevisionRecord.self,
+        AttemptRecord.self
     ])
 
     let modelContext: ModelContext
