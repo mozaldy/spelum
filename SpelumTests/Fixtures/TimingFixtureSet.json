@@ -1,0 +1,150 @@
+{
+  "fixtures": [
+    {
+      "id": "tenSecondTwentyWords",
+      "description": "10.0s elapsed audio with 20 finalized English words (120 est. WPM), a known 0.8s gap, and a unique exact phrase.",
+      "elapsedAudioDuration": 10.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Welcome everyone to our preview. Today we unveil Lumera offline. Listen to the transition and feel how steady it sounds.",
+      "exactPhrase": "Today we unveil Lumera offline.",
+      "cueWords": ["preview", "transition"],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Welcome", "startTime": 0.2, "endTime": 0.6, "isFinal": true },
+        { "text": "everyone", "startTime": 0.65, "endTime": 1.05, "isFinal": true },
+        { "text": "to", "startTime": 1.1, "endTime": 1.25, "isFinal": true },
+        { "text": "our", "startTime": 1.3, "endTime": 1.45, "isFinal": true },
+        { "text": "preview.", "startTime": 1.5, "endTime": 2.0, "isFinal": true },
+        { "text": "Today", "startTime": 2.8, "endTime": 3.2, "isFinal": true },
+        { "text": "we", "startTime": 3.25, "endTime": 3.45, "isFinal": true },
+        { "text": "unveil", "startTime": 3.5, "endTime": 3.9, "isFinal": true },
+        { "text": "Lumera", "startTime": 3.95, "endTime": 4.4, "isFinal": true },
+        { "text": "offline.", "startTime": 4.45, "endTime": 4.95, "isFinal": true },
+        { "text": "Listen", "startTime": 5.2, "endTime": 5.55, "isFinal": true },
+        { "text": "to", "startTime": 5.6, "endTime": 5.75, "isFinal": true },
+        { "text": "the", "startTime": 5.8, "endTime": 5.95, "isFinal": true },
+        { "text": "transition", "startTime": 6.0, "endTime": 6.55, "isFinal": true },
+        { "text": "and", "startTime": 6.6, "endTime": 6.75, "isFinal": true },
+        { "text": "feel", "startTime": 6.8, "endTime": 7.1, "isFinal": true },
+        { "text": "how", "startTime": 7.15, "endTime": 7.4, "isFinal": true },
+        { "text": "steady", "startTime": 7.45, "endTime": 7.9, "isFinal": true },
+        { "text": "it", "startTime": 7.95, "endTime": 8.15, "isFinal": true },
+        { "text": "sounds.", "startTime": 8.2, "endTime": 8.7, "isFinal": true }
+      ]
+    },
+    {
+      "id": "repeatedProductName",
+      "description": "Repeated product name Lumera occurs twice so alignment must be omitted and flagged as ambiguous.",
+      "elapsedAudioDuration": 8.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Lumera starts fast. Lumera keeps recordings local.",
+      "exactPhrase": "Lumera",
+      "cueWords": ["Lumera", "local"],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Lumera", "startTime": 0.4, "endTime": 0.9, "isFinal": true },
+        { "text": "starts", "startTime": 0.95, "endTime": 1.35, "isFinal": true },
+        { "text": "fast.", "startTime": 1.4, "endTime": 1.85, "isFinal": true },
+        { "text": "Lumera", "startTime": 2.1, "endTime": 2.6, "isFinal": true },
+        { "text": "keeps", "startTime": 2.65, "endTime": 3.0, "isFinal": true },
+        { "text": "recordings", "startTime": 3.05, "endTime": 3.7, "isFinal": true },
+        { "text": "local.", "startTime": 3.75, "endTime": 4.2, "isFinal": true }
+      ]
+    },
+    {
+      "id": "stageDirectionTrailingSilence",
+      "description": "Stage direction followed by trailing silence must not fabricate a gap or treat direction text as spoken.",
+      "elapsedAudioDuration": 9.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Watch the live screen now. [hold up device for five seconds of demo silence]",
+      "exactPhrase": "Watch the live screen now.",
+      "cueWords": [],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Watch", "startTime": 0.3, "endTime": 0.65, "isFinal": true },
+        { "text": "the", "startTime": 0.7, "endTime": 0.85, "isFinal": true },
+        { "text": "live", "startTime": 0.9, "endTime": 1.25, "isFinal": true },
+        { "text": "screen", "startTime": 1.3, "endTime": 1.75, "isFinal": true },
+        { "text": "now.", "startTime": 1.8, "endTime": 2.2, "isFinal": true }
+      ]
+    },
+    {
+      "id": "stageDirectionBetweenPhrases",
+      "description": "Stage direction between two phrases with a supported 0.8s gap reports the gap neutrally with context.",
+      "elapsedAudioDuration": 6.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Watch the screen. [pause for demo] Notice how quickly it responds.",
+      "exactPhrase": "Notice how quickly it responds.",
+      "cueWords": [],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Watch", "startTime": 0.2, "endTime": 0.55, "isFinal": true },
+        { "text": "the", "startTime": 0.6, "endTime": 0.75, "isFinal": true },
+        { "text": "screen.", "startTime": 0.8, "endTime": 1.2, "isFinal": true },
+        { "text": "Notice", "startTime": 2.0, "endTime": 2.4, "isFinal": true },
+        { "text": "how", "startTime": 2.45, "endTime": 2.65, "isFinal": true },
+        { "text": "quickly", "startTime": 2.7, "endTime": 3.1, "isFinal": true },
+        { "text": "it", "startTime": 3.15, "endTime": 3.3, "isFinal": true },
+        { "text": "responds.", "startTime": 3.35, "endTime": 3.9, "isFinal": true }
+      ]
+    },
+    {
+      "id": "multiSpeakerHandoffGap",
+      "description": "Multi-speaker handoff with a 0.8s gap must never attribute the gap to either speaker.",
+      "elapsedAudioDuration": 6.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Alex: Passing it over to you.\nJordan: Today we unveil Lumera offline.",
+      "exactPhrase": "Today we unveil Lumera offline.",
+      "cueWords": [],
+      "hasMultipleSpeakersOrHandoff": true,
+      "segments": [
+        { "text": "Passing", "startTime": 0.2, "endTime": 0.6, "isFinal": true },
+        { "text": "it", "startTime": 0.65, "endTime": 0.8, "isFinal": true },
+        { "text": "over", "startTime": 0.85, "endTime": 1.15, "isFinal": true },
+        { "text": "to", "startTime": 1.2, "endTime": 1.35, "isFinal": true },
+        { "text": "you.", "startTime": 1.4, "endTime": 1.7, "isFinal": true },
+        { "text": "Today", "startTime": 2.5, "endTime": 2.9, "isFinal": true },
+        { "text": "we", "startTime": 2.95, "endTime": 3.15, "isFinal": true },
+        { "text": "unveil", "startTime": 3.2, "endTime": 3.6, "isFinal": true },
+        { "text": "Lumera", "startTime": 3.65, "endTime": 4.1, "isFinal": true },
+        { "text": "offline.", "startTime": 4.15, "endTime": 4.65, "isFinal": true }
+      ]
+    },
+    {
+      "id": "paraphrasedAndMissingWords",
+      "description": "Presenter paraphrases and drops words from exact phrase; alignment must be omitted with manual-mark prompt.",
+      "elapsedAudioDuration": 5.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Today we unveil Lumera offline for every presenter.",
+      "exactPhrase": "Today we unveil Lumera offline",
+      "cueWords": [],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Right", "startTime": 0.3, "endTime": 0.6, "isFinal": true },
+        { "text": "now", "startTime": 0.65, "endTime": 0.9, "isFinal": true },
+        { "text": "we", "startTime": 0.95, "endTime": 1.1, "isFinal": true },
+        { "text": "share", "startTime": 1.15, "endTime": 1.5, "isFinal": true },
+        { "text": "our", "startTime": 1.55, "endTime": 1.75, "isFinal": true },
+        { "text": "tool", "startTime": 1.8, "endTime": 2.2, "isFinal": true },
+        { "text": "locally.", "startTime": 2.25, "endTime": 2.8, "isFinal": true }
+      ]
+    },
+    {
+      "id": "overlappingRanges",
+      "description": "Overlapping timed segments must omit WPM, overlapping gaps, and overlapping alignments.",
+      "elapsedAudioDuration": 5.0,
+      "localeIdentifier": "en_US",
+      "scriptText": "Today we unveil Lumera offline.",
+      "exactPhrase": "Today we unveil Lumera offline.",
+      "cueWords": [],
+      "hasMultipleSpeakersOrHandoff": false,
+      "segments": [
+        { "text": "Today", "startTime": 0.5, "endTime": 1.2, "isFinal": true },
+        { "text": "we", "startTime": 1.0, "endTime": 1.5, "isFinal": true },
+        { "text": "unveil", "startTime": 2.5, "endTime": 3.0, "isFinal": true },
+        { "text": "Lumera", "startTime": 3.1, "endTime": 3.6, "isFinal": true },
+        { "text": "offline.", "startTime": 3.7, "endTime": 4.2, "isFinal": true }
+      ]
+    }
+  ]
+}
