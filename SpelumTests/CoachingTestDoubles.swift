@@ -168,6 +168,16 @@ final class StubCoachingModelProvider: CoachingModelProviding, @unchecked Sendab
                 actionID: nil
             )
         }
+        if PreparationCoachingOptionSet.isMinimalClosingLine(request),
+           let abstention = optionSet.abstentionOptions.first(where: { $0.id == "abstain.prep.minimal-signoff" }) {
+            return RawModelPreparationSelection(
+                shouldAbstain: true,
+                abstentionReasonID: abstention.id,
+                techniqueID: nil,
+                passageID: nil,
+                actionID: nil
+            )
+        }
         let tech = optionSet.candidateTechniques.first?.id ?? "reveal.three-part-resolution"
         let passage = optionSet.passageOptions.first(where: { !$0.fromHandoff })?.id
             ?? optionSet.passageOptions.first?.id

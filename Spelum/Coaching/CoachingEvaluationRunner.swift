@@ -1,21 +1,5 @@
 import Foundation
 
-nonisolated struct SeededRandomGenerator: RandomNumberGenerator, Sendable {
-    private var state: UInt64
-
-    init(seed: UInt64) {
-        self.state = seed == 0 ? 0x9E37_79B9_7F4A_7C15 : seed
-    }
-
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var zValue = state
-        zValue = (zValue ^ (zValue >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        zValue = (zValue ^ (zValue >> 27)) &* 0x94D0_49BB_1331_11EB
-        return zValue ^ (zValue >> 31)
-    }
-}
-
 nonisolated final class CoachingEvaluationRunner: Sendable {
     let coachService: SectionCoachService
     let repeatTrialsPerCase: Int
@@ -33,6 +17,7 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
         dataset: CoachingEvaluationDataset,
         environment: CoachingDeviceEnvironment,
         randomSeed: UInt64? = nil,
+        isFreshProcessLaunch: Bool? = nil,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> CoachingEvaluationSession {
         var rng = SeededRandomGenerator(seed: randomSeed ?? UInt64.random(in: 1...UInt64.max))
@@ -40,6 +25,14 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
         let promptVersion = task == .preparation
             ? SectionCoachService.preparationPromptVersion
             : SectionCoachService.postTakePromptVersion
+        let freshLaunch: Bool
+        if let override = isFreshProcessLaunch {
+            freshLaunch = override
+        } else {
+            freshLaunch = await CoachingEvaluationProcessState.shared.consumeFreshLaunchIfAvailable(
+                modelAvailable: availability.isAvailable
+            )
+        }
 
         let batch: SuiteBatchResult
         switch task {
@@ -61,11 +54,16 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
             )
         }
 
-        let coldLatency = batch.latencies.first
-        let warmLatencies = batch.latencies.count > 1 ? Array(batch.latencies.dropFirst()) : []
+        let latencySummary = resolveLatencySummary(
+            batch: batch,
+            availability: availability,
+            environment: environment,
+            wasFreshLaunch: freshLaunch
+        )
         let now = Date()
         return CoachingEvaluationSession(
             id: UUID(),
+            evaluationSchemaVersion: CoachingEvaluationSession.currentSchemaVersion,
             task: task,
             datasetVersion: dataset.datasetVersion,
             promptVersion: promptVersion,
@@ -74,30 +72,69 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
             environment: environment,
             modelAvailability: availability,
             isUnblinded: false,
-            coldLatencyMilliseconds: coldLatency,
-            warmLatenciesMilliseconds: warmLatencies,
+            unblindedEarly: false,
+            coldLatencyStatus: latencySummary.status,
+            coldLatencyMilliseconds: latencySummary.coldMS,
+            warmLatenciesMilliseconds: latencySummary.warmMS,
             repeatVariationResults: batch.repeatResults,
             entries: batch.entries
         )
     }
 
     static func tokenJaccardSimilarity(_ lhs: String, _ rhs: String) -> Double {
-        let lhsTokens = normalizedTokens(lhs)
-        let rhsTokens = normalizedTokens(rhs)
-        if lhsTokens.isEmpty && rhsTokens.isEmpty {
-            return 1.0
-        }
-        let intersection = lhsTokens.intersection(rhsTokens).count
-        let union = lhsTokens.union(rhsTokens).count
-        return union > 0 ? Double(intersection) / Double(union) : 0.0
+        CoachingEvaluationRepeatMetrics.tokenJaccardSimilarity(lhs, rhs)
     }
 }
 
 private extension CoachingEvaluationRunner {
     struct SuiteBatchResult {
         let entries: [BlindedEvaluationEntry]
-        let latencies: [Double]
+        let firstCallLatencyMS: Double?
+        let subsequentLatenciesMS: [Double]
         let repeatResults: [RepeatVariationResult]
+    }
+
+    struct LatencySummary {
+        let status: ColdLatencyMeasurementStatus
+        let coldMS: Double?
+        let warmMS: [Double]
+    }
+
+    func resolveLatencySummary(
+        batch: SuiteBatchResult,
+        availability: CoachingModelAvailability,
+        environment: CoachingDeviceEnvironment,
+        wasFreshLaunch: Bool
+    ) -> LatencySummary {
+        guard availability.isAvailable else {
+            return LatencySummary(status: .modelUnavailable, coldMS: nil, warmMS: [])
+        }
+        guard let firstLatency = batch.firstCallLatencyMS else {
+            return LatencySummary(
+                status: .firstCallFailed,
+                coldMS: nil,
+                warmMS: batch.subsequentLatenciesMS
+            )
+        }
+        if environment.isSimulator {
+            return LatencySummary(
+                status: .simulatorNotPhysical,
+                coldMS: nil,
+                warmMS: [firstLatency] + batch.subsequentLatenciesMS
+            )
+        }
+        if !wasFreshLaunch {
+            return LatencySummary(
+                status: .processAlreadyWarmed,
+                coldMS: nil,
+                warmMS: [firstLatency] + batch.subsequentLatenciesMS
+            )
+        }
+        return LatencySummary(
+            status: .verifiedColdLaunch,
+            coldMS: firstLatency,
+            warmMS: batch.subsequentLatenciesMS
+        )
     }
 
     func runPreparationBatch(
@@ -108,18 +145,24 @@ private extension CoachingEvaluationRunner {
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> SuiteBatchResult {
         var entries: [BlindedEvaluationEntry] = []
-        var latencies: [Double] = []
+        var firstCallLatency: Double?
+        var subsequentLatencies: [Double] = []
         var repeatResults: [RepeatVariationResult] = []
         let total = cases.count
 
         for (index, evalCase) in cases.enumerated() {
+            if Task.isCancelled { break }
             let request = evalCase.makeRequest(promptVersion: promptVersion)
             let authored = await coachService.generatePreparationCue(request: request, mode: .authoredBaseline)
             let (modelCue, elapsedMS) = await timedPreparation(
                 request: request,
                 isModelAvailable: isModelAvailable
             )
-            if let elapsedMS { latencies.append(elapsedMS) }
+            if index == 0 {
+                firstCallLatency = elapsedMS
+            } else if let elapsedMS {
+                subsequentLatencies.append(elapsedMS)
+            }
             entries.append(
                 makeBlindedEntry(
                     id: evalCase.id,
@@ -141,6 +184,7 @@ private extension CoachingEvaluationRunner {
         }
 
         for evalCase in cases where evalCase.includeInRepeatCheck {
+            if Task.isCancelled { break }
             let item = await measurePreparationRepeatVariation(
                 evalCase: evalCase,
                 promptVersion: promptVersion,
@@ -148,7 +192,12 @@ private extension CoachingEvaluationRunner {
             )
             repeatResults.append(item)
         }
-        return SuiteBatchResult(entries: entries, latencies: latencies, repeatResults: repeatResults)
+        return SuiteBatchResult(
+            entries: entries,
+            firstCallLatencyMS: firstCallLatency,
+            subsequentLatenciesMS: subsequentLatencies,
+            repeatResults: repeatResults
+        )
     }
 
     func runPostTakeBatch(
@@ -159,18 +208,24 @@ private extension CoachingEvaluationRunner {
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> SuiteBatchResult {
         var entries: [BlindedEvaluationEntry] = []
-        var latencies: [Double] = []
+        var firstCallLatency: Double?
+        var subsequentLatencies: [Double] = []
         var repeatResults: [RepeatVariationResult] = []
         let total = cases.count
 
         for (index, evalCase) in cases.enumerated() {
+            if Task.isCancelled { break }
             let request = evalCase.makeRequest(promptVersion: promptVersion)
             let authored = await coachService.generatePostTakeCue(request: request, mode: .authoredBaseline)
             let (modelCue, elapsedMS) = await timedPostTake(
                 request: request,
                 isModelAvailable: isModelAvailable
             )
-            if let elapsedMS { latencies.append(elapsedMS) }
+            if index == 0 {
+                firstCallLatency = elapsedMS
+            } else if let elapsedMS {
+                subsequentLatencies.append(elapsedMS)
+            }
             entries.append(
                 makeBlindedEntry(
                     id: evalCase.id,
@@ -192,6 +247,7 @@ private extension CoachingEvaluationRunner {
         }
 
         for evalCase in cases where evalCase.includeInRepeatCheck {
+            if Task.isCancelled { break }
             let item = await measurePostTakeRepeatVariation(
                 evalCase: evalCase,
                 promptVersion: promptVersion,
@@ -199,7 +255,12 @@ private extension CoachingEvaluationRunner {
             )
             repeatResults.append(item)
         }
-        return SuiteBatchResult(entries: entries, latencies: latencies, repeatResults: repeatResults)
+        return SuiteBatchResult(
+            entries: entries,
+            firstCallLatencyMS: firstCallLatency,
+            subsequentLatenciesMS: subsequentLatencies,
+            repeatResults: repeatResults
+        )
     }
 
     func timedPreparation(
@@ -210,7 +271,8 @@ private extension CoachingEvaluationRunner {
         let start = clock.now
         let cue = await coachService.generatePreparationCue(request: request, mode: .onDeviceModel)
         let elapsedMS = durationMilliseconds(start.duration(to: clock.now))
-        return (cue, isModelAvailable ? elapsedMS : nil)
+        let measured = (isModelAvailable && cue.origin == .onDeviceModel) ? elapsedMS : nil
+        return (cue, measured)
     }
 
     func timedPostTake(
@@ -221,7 +283,8 @@ private extension CoachingEvaluationRunner {
         let start = clock.now
         let cue = await coachService.generatePostTakeCue(request: request, mode: .onDeviceModel)
         let elapsedMS = durationMilliseconds(start.duration(to: clock.now))
-        return (cue, isModelAvailable ? elapsedMS : nil)
+        let measured = (isModelAvailable && cue.origin == .onDeviceModel) ? elapsedMS : nil
+        return (cue, measured)
     }
 
     func measurePreparationRepeatVariation(
@@ -233,11 +296,12 @@ private extension CoachingEvaluationRunner {
         var suggestions: [CoachingSuggestion] = []
         var trialLatencies: [Double] = []
         for _ in 0..<repeatTrialsPerCase {
+            if Task.isCancelled { break }
             let (cue, elapsedMS) = await timedPreparation(request: request, isModelAvailable: isModelAvailable)
             suggestions.append(cue)
             if let elapsedMS { trialLatencies.append(elapsedMS) }
         }
-        return summarizeRepeatTrials(
+        return CoachingEvaluationRepeatMetrics.summarize(
             id: evalCase.id,
             caseTitle: evalCase.title,
             suggestions: suggestions,
@@ -254,61 +318,16 @@ private extension CoachingEvaluationRunner {
         var suggestions: [CoachingSuggestion] = []
         var trialLatencies: [Double] = []
         for _ in 0..<repeatTrialsPerCase {
+            if Task.isCancelled { break }
             let (cue, elapsedMS) = await timedPostTake(request: request, isModelAvailable: isModelAvailable)
             suggestions.append(cue)
             if let elapsedMS { trialLatencies.append(elapsedMS) }
         }
-        return summarizeRepeatTrials(
+        return CoachingEvaluationRepeatMetrics.summarize(
             id: evalCase.id,
             caseTitle: evalCase.title,
             suggestions: suggestions,
             latencies: trialLatencies
-        )
-    }
-
-    func summarizeRepeatTrials(
-        id: String,
-        caseTitle: String,
-        suggestions: [CoachingSuggestion],
-        latencies: [Double]
-    ) -> RepeatVariationResult {
-        let normalizedActions = suggestions.map {
-            $0.displayedAction.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        }
-        let uniqueActions = Set(normalizedActions).count
-        let fallbackCount = suggestions.filter { $0.origin == .authoredFallback }.count
-
-        let techKeys = suggestions.map { $0.isAbstention ? "abstain" : ($0.techniqueID ?? "none") }
-        let grouped = Dictionary(grouping: techKeys, by: { $0 }).values.map(\.count)
-        let dominantCount = grouped.max() ?? 0
-        let agreementRate = suggestions.isEmpty
-            ? 1.0
-            : Double(dominantCount) / Double(suggestions.count)
-
-        var pairwiseSimilarities: [Double] = []
-        for idxA in 0..<suggestions.count {
-            for idxB in (idxA + 1)..<suggestions.count {
-                pairwiseSimilarities.append(
-                    Self.tokenJaccardSimilarity(
-                        suggestions[idxA].displayedAction,
-                        suggestions[idxB].displayedAction
-                    )
-                )
-            }
-        }
-        let meanSimilarity = pairwiseSimilarities.isEmpty
-            ? 1.0
-            : pairwiseSimilarities.reduce(0, +) / Double(pairwiseSimilarities.count)
-
-        return RepeatVariationResult(
-            id: id,
-            caseTitle: caseTitle,
-            trialCount: suggestions.count,
-            uniqueActionCount: uniqueActions,
-            techniqueAgreementRate: agreementRate,
-            meanTokenOverlapSimilarity: meanSimilarity,
-            trialLatenciesMilliseconds: latencies,
-            fallbackCount: fallbackCount
         )
     }
 
@@ -371,14 +390,8 @@ private extension CoachingEvaluationRunner {
 
     func durationMilliseconds(_ duration: Duration) -> Double {
         let components = duration.components
-        return Double(components.seconds) * 1000.0 + Double(components.attoseconds) / 1e15
-    }
-
-    static func normalizedTokens(_ text: String) -> Set<String> {
-        let parts = text
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-        return Set(parts)
+        let seconds = Double(components.seconds)
+        let attoseconds = Double(components.attoseconds) / 1_000_000_000_000_000_000.0
+        return max(0, (seconds + attoseconds) * 1_000.0)
     }
 }

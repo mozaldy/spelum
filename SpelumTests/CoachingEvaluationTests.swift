@@ -103,11 +103,13 @@ struct CoachingEvaluationTests {
                 deviceModel: "iPhone18,1",
                 isSimulator: false
             ),
-            randomSeed: 42
+            randomSeed: 42,
+            isFreshProcessLaunch: true
         )
 
         #expect(session.entries.count == 20)
         #expect(!session.isUnblinded)
+        #expect(session.coldLatencyStatus == .verifiedColdLaunch)
         #expect(session.coldLatencyMilliseconds != nil)
         #expect(!session.warmLatenciesMilliseconds.isEmpty)
         #expect(!session.repeatVariationResults.isEmpty)
@@ -151,7 +153,8 @@ struct CoachingEvaluationTests {
                 deviceModel: "iPhone 17",
                 isSimulator: true
             ),
-            randomSeed: 7
+            randomSeed: 7,
+            isFreshProcessLaunch: false
         )
 
         try store.save(session)
@@ -163,7 +166,7 @@ struct CoachingEvaluationTests {
         #expect(report.contains("Spelum Blinded Coach Evaluation"))
         #expect(report.contains("Keep Authored Baseline"))
 
-        store.clear(for: .postTake)
+        try store.clear(for: .postTake)
         #expect(store.loadLatest(for: .postTake) == nil)
     }
 

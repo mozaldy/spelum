@@ -18,6 +18,7 @@ struct CoachingEvaluationView: View {
     @State private var errorMessage: String?
     @State private var copiedConfirmation = false
     @State private var showingRevealWarning = false
+    @State private var showingRerunWarning = false
 
     private var currentSession: CoachingEvaluationSession? {
         sessions[selectedTask]
@@ -34,13 +35,17 @@ struct CoachingEvaluationView: View {
     var body: some View {
         NavigationStack {
             List {
-                policyAndEnvironmentSection
+                CoachingEvaluationEnvironmentSection(
+                    environment: deviceEnvironment,
+                    modelAvailability: modelAvailability
+                )
                 taskControlSection
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
                             .foregroundStyle(.red)
+                            .accessibilityIdentifier("evaluationErrorMessage")
                     }
                 }
                 if let session = currentSession {
@@ -58,9 +63,11 @@ struct CoachingEvaluationView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .disabled(isRunning)
                     .accessibilityIdentifier("closeCoachEvaluationButton")
                 }
             }
+            .interactiveDismissDisabled(isRunning)
             .onAppear {
                 loadInitialState()
             }
@@ -84,48 +91,25 @@ struct CoachingEvaluationView: View {
                 isPresented: $showingRevealWarning,
                 titleVisibility: .visible
             ) {
-                Button("Reveal Results") {
-                    setUnblinded(true)
+                Button("Reveal Results (Disqualifies Session)", role: .destructive) {
+                    setUnblinded(true, markEarly: true)
                 }
                 Button("Keep Blinded", role: .cancel) {}
             } message: {
-                Text("Revealing early breaks blinding for remaining unrated cases.")
+                Text("Revealing early breaks blinding and disqualifies this session from shipping qualification.")
             }
-        }
-    }
-
-    private var policyAndEnvironmentSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Shipped Defaults: Authored Baseline")
-                    .font(.subheadline.weight(.semibold))
-                Text(
-                    "Both pre-practice and post-take stay on authored cues until physical-device " +
-                    "blinded results reach 16/20 useful, 0 safety issues, and clear preference."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .confirmationDialog(
+                "Overwrite rated evaluation session?",
+                isPresented: $showingRerunWarning,
+                titleVisibility: .visible
+            ) {
+                Button("Re-Run & Overwrite", role: .destructive) {
+                    startSuiteRun()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Re-running replaces your existing saved ratings for \(selectedTask.displayName).")
             }
-            .padding(.vertical, 2)
-
-            LabeledContent("Device") {
-                Text(
-                    deviceEnvironment.isSimulator
-                        ? "Simulator (\(deviceEnvironment.osDescription))"
-                        : "\(deviceEnvironment.deviceModel) · \(deviceEnvironment.osDescription)"
-                )
-                .font(.footnote)
-                .foregroundStyle(deviceEnvironment.isSimulator ? .orange : .primary)
-            }
-
-            LabeledContent("On-Device Model") {
-                Text(modelAvailability.shortStatusLabel)
-                    .font(.footnote)
-                    .foregroundStyle(modelAvailability.isAvailable ? .green : .secondary)
-            }
-        } header: {
-            Text("Internal Blinded Comparison")
         }
     }
 
@@ -145,11 +129,19 @@ struct CoachingEvaluationView: View {
                     Text("Running synthetic cases (\(progressCompleted)/\(progressTotal)) & repeat checks…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Button(role: .destructive) {
+                        cancelSuiteRun()
+                    } label: {
+                        Label("Cancel Run", systemImage: "stop.circle")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("cancelBlindedSuiteButton")
                 }
                 .padding(.vertical, 4)
             } else {
                 Button {
-                    startSuiteRun()
+                    requestSuiteRun()
                 } label: {
                     Label(
                         currentSession == nil
@@ -179,12 +171,23 @@ struct CoachingEvaluationView: View {
                 .foregroundStyle(.secondary)
         }
 
+        if session.isLegacySession {
+            Label(
+                "Legacy evaluation session (\(session.promptVersion)). Re-run on v2 for a valid qualification check.",
+                systemImage: "clock.arrow.circlepath"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("evaluationLegacySessionBanner")
+        }
+
         if !session.isUnblinded {
             Button {
                 if stats.ratedCases < stats.totalCases {
                     showingRevealWarning = true
                 } else {
-                    setUnblinded(true)
+                    setUnblinded(true, markEarly: false)
                 }
             } label: {
                 Label("Reveal Blinded Results", systemImage: "eye")
@@ -241,6 +244,7 @@ struct CoachingEvaluationView: View {
            let session = currentSession,
            session.entries.indices.contains(index) {
             CoachingEvaluationCaseSheet(
+                task: session.task,
                 entry: session.entries[index],
                 caseIndex: index,
                 totalCases: session.entries.count,
@@ -270,6 +274,20 @@ private extension CoachingEvaluationView {
         }
     }
 
+    func requestSuiteRun() {
+        if let existing = currentSession, existing.summary().ratedCases > 0 {
+            showingRerunWarning = true
+        } else {
+            startSuiteRun()
+        }
+    }
+
+    func cancelSuiteRun() {
+        runTask?.cancel()
+        runTask = nil
+        isRunning = false
+    }
+
     func startSuiteRun() {
         guard let dataset else { return }
         runTask?.cancel()
@@ -296,7 +314,10 @@ private extension CoachingEvaluationView {
                     }
                 }
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                isRunning = false
+                return
+            }
             sessions[taskKind] = result
             isRunning = false
             do {
@@ -312,29 +333,47 @@ private extension CoachingEvaluationView {
               session.entries.indices.contains(index) else {
             return
         }
+        errorMessage = nil
         session.entries[index].rating = rating
         session.updatedAt = Date()
-        sessions[selectedTask] = session
-        try? sessionStore.save(session)
-        if advanceNext, index + 1 < session.entries.count {
-            activeCaseIndex = index + 1
-        } else if !advanceNext {
-            activeCaseIndex = nil
+        do {
+            try sessionStore.save(session)
+            sessions[selectedTask] = session
+            if advanceNext, index + 1 < session.entries.count {
+                activeCaseIndex = index + 1
+            } else if !advanceNext {
+                activeCaseIndex = nil
+            }
+        } catch {
+            errorMessage = "Could not save rating: \(error.localizedDescription)"
         }
     }
 
-    func setUnblinded(_ unblinded: Bool) {
+    func setUnblinded(_ unblinded: Bool, markEarly: Bool) {
         guard var session = sessions[selectedTask] else { return }
+        errorMessage = nil
         session.isUnblinded = unblinded
+        if markEarly {
+            session.unblindedEarly = true
+        }
         session.updatedAt = Date()
-        sessions[selectedTask] = session
-        copiedConfirmation = false
-        try? sessionStore.save(session)
+        do {
+            try sessionStore.save(session)
+            sessions[selectedTask] = session
+        } catch {
+            errorMessage = "Could not update blinding state: \(error.localizedDescription)"
+        }
     }
 
     func clearCurrentSession() {
-        sessionStore.clear(for: selectedTask)
-        sessions.removeValue(forKey: selectedTask)
-        copiedConfirmation = false
+        errorMessage = nil
+        do {
+            try sessionStore.clear(for: selectedTask)
+            sessions[selectedTask] = nil
+            activeCaseIndex = nil
+            copiedConfirmation = false
+        } catch {
+            errorMessage = "Could not clear saved session: \(error.localizedDescription)"
+        }
     }
 }

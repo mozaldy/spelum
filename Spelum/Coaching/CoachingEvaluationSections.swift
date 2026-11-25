@@ -15,17 +15,17 @@ struct CoachingEvaluationResultsSections: View {
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("evaluationDecisionHeadline")
 
-            LabeledContent("Useful (On-Device vs Authored)") {
+            LabeledContent("Useful (Non-Fallback Model vs Authored)") {
                 Text(
                     "\(stats.modelUsefulCount)/\(stats.totalCases) vs " +
                     "\(stats.authoredUsefulCount)/\(stats.totalCases)"
                 )
                 .font(.footnote.monospacedDigit())
             }
-            LabeledContent("Preference (Model / Authored / Tie / Neither)") {
+            LabeledContent("Preference (Model / Authored / Fallback / Tie / Neither)") {
                 Text(
                     "\(stats.modelPreferredCount) / \(stats.authoredPreferredCount) / " +
-                    "\(stats.tieCount) / \(stats.neitherCount)"
+                    "\(stats.fallbackPreferredCount) / \(stats.tieCount) / \(stats.neitherCount)"
                 )
                 .font(.footnote.monospacedDigit())
             }
@@ -34,16 +34,24 @@ struct CoachingEvaluationResultsSections: View {
                     .font(.footnote.monospacedDigit().weight(.semibold))
                     .foregroundStyle(stats.totalModelSafetyViolations == 0 ? .green : .red)
             }
+            LabeledContent("Abstention Check (Model)") {
+                Text(
+                    "\(stats.modelAbstentionCorrectCount)/\(stats.expectedAbstentionCount) " +
+                    "(missed \(stats.modelMissedAbstentionCount), false \(stats.modelFalseAbstentionCount))"
+                )
+                .font(.footnote.monospacedDigit())
+            }
             LabeledContent("Model Fallbacks to Authored") {
-                Text("\(stats.modelFallbackCount)/\(stats.totalCases)")
+                Text("\(stats.modelFallbackCount)/\(stats.totalCases) (val \(stats.modelValidationFailureCount))")
                     .font(.footnote.monospacedDigit())
             }
         }
 
         Section("Latency & Repeated Variation") {
             LabeledContent("Cold Model Latency") {
-                Text(Self.formatMS(stats.coldLatencyMilliseconds))
+                Text(Self.formatCold(stats.coldLatencyMilliseconds, status: stats.coldLatencyStatus))
                     .font(.footnote.monospacedDigit())
+                    .multilineTextAlignment(.trailing)
             }
             LabeledContent("Warm Median Latency") {
                 Text(Self.formatMS(stats.warmMedianLatencyMilliseconds))
@@ -60,24 +68,38 @@ struct CoachingEvaluationResultsSections: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(repeatItem.caseTitle)
                         .font(.footnote.weight(.semibold))
-                    let agreePct = Int((repeatItem.techniqueAgreementRate * 100).rounded())
-                    let simPct = Int((repeatItem.meanTokenOverlapSimilarity * 100).rounded())
-                    Text(
-                        "\(repeatItem.trialCount) trials · \(repeatItem.uniqueActionCount) phrasing(s) · " +
-                        "Technique agreement \(agreePct)% · Overlap \(simPct)% · Fallbacks \(repeatItem.fallbackCount)"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(Self.formatRepeatLine(repeatItem))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 2)
             }
         }
     }
 
+    static func formatCold(_ value: Double?, status: ColdLatencyMeasurementStatus) -> String {
+        if let value, status == .verifiedColdLaunch {
+            return String(format: "%.0f ms (Verified Cold)", value)
+        }
+        return status.displayLabel
+    }
+
     static func formatMS(_ value: Double?) -> String {
-        guard let value else { return "N/A (model unavailable)" }
+        guard let value else { return "N/A (no successful model calls)" }
         return String(format: "%.0f ms", value)
+    }
+
+    static func formatRepeatLine(_ item: RepeatVariationResult) -> String {
+        let base = "\(item.successfulTrialCount)/\(item.trialCount) model trials · " +
+            "\(item.uniqueActionCount) phrasing(s) · Fallbacks \(item.fallbackCount)"
+        guard let agree = item.techniqueAgreementRate,
+              let sim = item.meanTokenOverlapSimilarity else {
+            return "\(base) · Stability N/A (< 2 model trials)"
+        }
+        let agreePct = Int((agree * 100).rounded())
+        let simPct = Int((sim * 100).rounded())
+        return "\(base) · Agreement \(agreePct)% · Overlap \(simPct)%"
     }
 }
 
@@ -86,10 +108,14 @@ struct CoachingEvaluationCaseRow: View {
     let entry: BlindedEvaluationEntry
     let isUnblinded: Bool
 
+    private var displayedTitle: String {
+        entry.displayTitle(at: index, isUnblinded: isUnblinded)
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(index + 1). \(entry.title)")
+                Text(displayedTitle)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -107,7 +133,7 @@ struct CoachingEvaluationCaseRow: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Case \(index + 1): \(entry.title), \(entry.category.displayName), " +
+            "\(displayedTitle), \(entry.category.displayName), " +
             "\(entry.isRated ? "rated" : "not yet rated")"
         )
     }
@@ -120,9 +146,61 @@ struct CoachingEvaluationCaseRow: View {
         if isUnblinded, let ms = entry.modelLatencyMilliseconds {
             parts.append(CoachingEvaluationResultsSections.formatMS(ms))
         }
-        if isUnblinded, entry.modelFellBackToAuthored {
+        if isUnblinded, entry.isModelFallback {
             parts.append("Fallback")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+struct CoachingEvaluationEnvironmentSection: View {
+    let environment: CoachingDeviceEnvironment
+    let modelAvailability: CoachingModelAvailability
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Shipped Defaults: Authored Baseline")
+                    .font(.subheadline.weight(.semibold))
+                Text(
+                    "Both pre-practice and post-take stay on authored cues until physical-device " +
+                    "blinded results reach 16/20 useful, 0 safety issues, 0 fallbacks, and clear preference."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+
+            LabeledContent("Device") {
+                Text(
+                    environment.isSimulator
+                        ? "Simulator (\(environment.osDescription))"
+                        : "\(environment.deviceModel) · \(environment.osDescription)"
+                )
+                .font(.footnote)
+                .foregroundStyle(environment.isSimulator ? .orange : .primary)
+            }
+
+            LabeledContent("On-Device Model") {
+                Text(modelAvailability.shortStatusLabel)
+                    .font(.footnote)
+                    .foregroundStyle(modelAvailability.isAvailable ? .green : .secondary)
+            }
+
+            if !modelAvailability.isAvailable {
+                Label(
+                    "On-device model is unavailable here. Runs record authored fallbacks only " +
+                    "and cannot qualify on-device generation.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("evaluationUnavailableBanner")
+            }
+        } header: {
+            Text("Internal Blinded Comparison")
+        }
     }
 }
