@@ -121,8 +121,15 @@ struct PracticeView: View {
         }
         .navigationTitle("Practice")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { initializeSessionIfNeeded() }
+        .onAppear {
+            initializeSessionIfNeeded()
+            session?.refreshPermissionStatus()
+            session?.reconcileReferencedAttempt()
+        }
         .onChange(of: target.retryToken) { _, _ in resetSessionForNewTarget() }
+        .onChange(of: sectionAttempts.map(\.id)) { _, _ in
+            session?.reconcileReferencedAttempt()
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 session?.refreshPermissionStatus()
@@ -161,7 +168,7 @@ struct PracticeView: View {
             titleVisibility: .visible
         ) {
             Button("Discard Recording", role: .destructive) {
-                session?.discardFailedSave()
+                _ = session?.discardFailedSave()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -228,7 +235,7 @@ struct PracticeView: View {
         }
 
         PracticeRecoveryBanner(
-            phase: session.phase,
+            phase: displayedBannerPhase(for: session),
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
             onOpenReview: onOpenReview,
             onRetrySection: { session.prepareForRetry() },
@@ -251,13 +258,15 @@ struct PracticeView: View {
             onRequestDelete: { attemptPendingDelete = $0 }
         )
     }
+}
 
-    private func initializeSessionIfNeeded() {
+private extension PracticeView {
+    func initializeSessionIfNeeded() {
         guard session == nil else { return }
         resetSessionForNewTarget()
     }
 
-    private func resetSessionForNewTarget() {
+    func resetSessionForNewTarget() {
         let talkRevision = target.talkRevisionID.flatMap { id in
             presentation.talkRevisions.first { $0.id == id }
         } ?? presentationStore.currentTalkRevision(for: presentation)
@@ -295,10 +304,29 @@ struct PracticeView: View {
         }
     }
 
-    private func deleteAttempt(_ attempt: AttemptRecord) {
+    func displayedBannerPhase(for session: RecordingSession) -> RecordingSessionPhase {
+        guard case .interrupted(let attemptID, _, _) = session.phase else {
+            return session.phase
+        }
+        if sectionAttempts.contains(where: { $0.id == attemptID }) {
+            return session.phase
+        }
+        do {
+            if try attemptStore.attempt(withID: attemptID) == nil {
+                return .idle
+            }
+        } catch {
+            return session.phase
+        }
+        return session.phase
+    }
+
+    func deleteAttempt(_ attempt: AttemptRecord) {
         historyErrorMessage = nil
+        let deletedID = attempt.id
         do {
             try attemptStore.deleteAttempt(attempt)
+            session?.clearDeletedAttemptReference(deletedID)
         } catch {
             historyErrorMessage = error.localizedDescription
         }
