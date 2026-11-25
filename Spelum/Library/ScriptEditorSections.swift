@@ -4,6 +4,19 @@ struct ScriptEditorHandoffSection: View {
     let handoff: HandoffContext
     @Binding var handoffCue: String
     let onPresentHandoff: () -> Void
+    let onStartPractice: (() -> Void)?
+
+    init(
+        handoff: HandoffContext,
+        handoffCue: Binding<String>,
+        onPresentHandoff: @escaping () -> Void,
+        onStartPractice: (() -> Void)? = nil
+    ) {
+        self.handoff = handoff
+        self._handoffCue = handoffCue
+        self.onPresentHandoff = onPresentHandoff
+        self.onStartPractice = onStartPractice
+    }
 
     var body: some View {
         Section {
@@ -27,6 +40,13 @@ struct ScriptEditorHandoffSection: View {
                 Label("Present Handoff", systemImage: "rectangle.portrait.and.arrow.right")
             }
             .accessibilityIdentifier("presentHandoffButton")
+
+            if let onStartPractice {
+                Button(action: onStartPractice) {
+                    Label("Practice Section", systemImage: "mic.fill")
+                }
+                .accessibilityIdentifier("practiceSectionFromEditorButton")
+            }
         } header: {
             Text("Handoff Cue")
         } footer: {

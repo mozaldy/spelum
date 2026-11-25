@@ -149,11 +149,40 @@ struct HandoffPresentationSheet: View {
     let sectionDraft: SectionDraft
     let handoffContext: HandoffContext
     let totalSections: Int
+    let onStartPractice: (() -> Void)?
+
+    init(
+        presentationTitle: String,
+        revisionNumber: Int,
+        sectionDraft: SectionDraft,
+        handoffContext: HandoffContext,
+        totalSections: Int,
+        onStartPractice: (() -> Void)? = nil
+    ) {
+        self.presentationTitle = presentationTitle
+        self.revisionNumber = revisionNumber
+        self.sectionDraft = sectionDraft
+        self.handoffContext = handoffContext
+        self.totalSections = totalSections
+        self.onStartPractice = onStartPractice
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let onStartPractice {
+                        Button {
+                            onStartPractice()
+                            dismiss()
+                        } label: {
+                            Label("Practice This Section", systemImage: "mic.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("startPracticeFromHandoffButton")
+                    }
                     handoffCard
                     sectionMetadataCard
                     if let exactPhrase = sectionDraft.exactPhrase,

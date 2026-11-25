@@ -4,6 +4,8 @@ import SwiftUI
 enum LibraryRoute: Hashable {
     case presentation(UUID)
     case section(presentationID: UUID, sectionID: UUID)
+    case practice(PracticeTarget)
+    case review(attemptID: UUID)
 }
 
 struct ContentView: View {
@@ -20,6 +22,10 @@ struct ContentView: View {
 
     private var store: PresentationStore {
         PresentationStore(modelContext: modelContext)
+    }
+
+    private var attemptStore: AttemptStore {
+        AttemptStore(modelContext: modelContext)
     }
 
     var body: some View {
@@ -72,7 +78,10 @@ struct ContentView: View {
                     presentationPendingDelete = nil
                 }
             } message: {
-                Text("This removes the presentation and all of its saved script revisions from this device.")
+                Text(
+                    "This removes the presentation, its saved script revisions, " +
+                    "and its local rehearsal takes from this device."
+                )
             }
         }
     }
@@ -127,7 +136,7 @@ struct ContentView: View {
                     }
                 }
             } footer: {
-                Text("Scripts and saved revisions stay strictly local on this device.")
+                Text("Scripts, saved revisions, and rehearsal takes stay strictly local on this device.")
             }
         }
         .listStyle(.insetGrouped)
@@ -138,34 +147,66 @@ struct ContentView: View {
         switch route {
         case .presentation(let presentationID):
             if let presentation = presentations.first(where: { $0.id == presentationID }) {
-                PresentationDetailView(presentation: presentation) { sectionID in
-                    navigationPath.append(
-                        .section(presentationID: presentation.id, sectionID: sectionID)
-                    )
-                }
-            } else {
-                ContentUnavailableView(
-                    "Presentation Not Found",
-                    systemImage: "doc.questionmark",
-                    description: Text("This presentation may have been deleted.")
+                PresentationDetailView(
+                    presentation: presentation,
+                    onSelectSection: { sectionID in
+                        navigationPath.append(
+                            .section(presentationID: presentation.id, sectionID: sectionID)
+                        )
+                    },
+                    onPracticeSection: { target in
+                        navigationPath.append(.practice(target))
+                    },
+                    onOpenReview: { attemptID in
+                        navigationPath.append(.review(attemptID: attemptID))
+                    }
                 )
+            } else {
+                missingPresentationView
             }
         case .section(let presentationID, let sectionID):
             if let presentation = presentations.first(where: { $0.id == presentationID }) {
-                ScriptEditor(presentation: presentation, sectionID: sectionID) { nextSectionID in
-                    replaceCurrentSectionRoute(
-                        presentationID: presentation.id,
-                        sectionID: nextSectionID
-                    )
-                }
-            } else {
-                ContentUnavailableView(
-                    "Presentation Not Found",
-                    systemImage: "doc.questionmark",
-                    description: Text("This presentation may have been deleted.")
+                ScriptEditor(
+                    presentation: presentation,
+                    sectionID: sectionID,
+                    onNavigateToSection: { nextSectionID in
+                        replaceCurrentSectionRoute(
+                            presentationID: presentation.id,
+                            sectionID: nextSectionID
+                        )
+                    },
+                    onPracticeSection: { target in
+                        navigationPath.append(.practice(target))
+                    }
                 )
+            } else {
+                missingPresentationView
+            }
+        case .practice(let target):
+            if let presentation = presentations.first(where: { $0.id == target.presentationID }) {
+                PracticeView(
+                    presentation: presentation,
+                    target: target,
+                    onOpenReview: { attemptID in
+                        navigationPath.append(.review(attemptID: attemptID))
+                    }
+                )
+            } else {
+                missingPresentationView
+            }
+        case .review(let attemptID):
+            TakeReview(attemptID: attemptID) { retryTarget in
+                navigateToRetry(retryTarget)
             }
         }
+    }
+
+    private var missingPresentationView: some View {
+        ContentUnavailableView(
+            "Presentation Not Found",
+            systemImage: "doc.questionmark",
+            description: Text("This presentation may have been deleted.")
+        )
     }
 
     private func replaceCurrentSectionRoute(presentationID: UUID, sectionID: UUID) {
@@ -182,10 +223,34 @@ struct ContentView: View {
         }
     }
 
+    private func navigateToRetry(_ target: PracticeTarget) {
+        if navigationPath.count >= 2,
+           case .review = navigationPath[navigationPath.count - 1],
+           case .practice(let previousTarget) = navigationPath[navigationPath.count - 2],
+           previousTarget.presentationID == target.presentationID,
+           previousTarget.sectionID == target.sectionID {
+            let preservedDraftTarget = PracticeTarget(
+                presentationID: target.presentationID,
+                sectionID: target.sectionID,
+                talkRevisionID: target.talkRevisionID,
+                sectionRevisionID: target.sectionRevisionID,
+                initialMode: target.initialMode,
+                hasUnsavedEditorDraft: previousTarget.hasUnsavedEditorDraft,
+                retryToken: target.retryToken
+            )
+            navigationPath[navigationPath.count - 2] = .practice(preservedDraftTarget)
+            navigationPath.removeLast()
+        } else if !navigationPath.isEmpty, case .review = navigationPath[navigationPath.count - 1] {
+            navigationPath[navigationPath.count - 1] = .practice(target)
+        } else {
+            navigationPath.append(.practice(target))
+        }
+    }
+
     private func deletePresentation(_ presentation: PresentationRecord) {
         errorMessage = nil
         do {
-            try store.deletePresentation(presentation)
+            try attemptStore.deletePresentationAndAttempts(presentation)
         } catch {
             errorMessage = error.localizedDescription
         }

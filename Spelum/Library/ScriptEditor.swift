@@ -18,6 +18,19 @@ struct ScriptEditor: View {
     let presentation: PresentationRecord
     let sectionID: UUID
     let onNavigateToSection: (UUID) -> Void
+    let onPracticeSection: (PracticeTarget) -> Void
+
+    init(
+        presentation: PresentationRecord,
+        sectionID: UUID,
+        onNavigateToSection: @escaping (UUID) -> Void,
+        onPracticeSection: @escaping (PracticeTarget) -> Void = { _ in }
+    ) {
+        self.presentation = presentation
+        self.sectionID = sectionID
+        self.onNavigateToSection = onNavigateToSection
+        self.onPracticeSection = onPracticeSection
+    }
 
     @State var draftTitle = ""
     @State var draftText = ""
@@ -34,6 +47,7 @@ struct ScriptEditor: View {
 
     @State var showingLineSplitSheet = false
     @State var showingHandoffPreview = false
+    @State var pendingStartPracticeFromHandoff = false
     @State var pendingExit: PendingEditorExit?
     @State var pendingLineSplitIndex: String.Index?
     @State var pendingExactPhraseSplit: PendingExactPhraseSplit?
@@ -66,14 +80,17 @@ struct ScriptEditor: View {
                 pendingLineSplitIndex = index
             }
         }
-        .sheet(isPresented: $showingHandoffPreview) {
+        .sheet(isPresented: $showingHandoffPreview, onDismiss: handlePendingHandoffPractice) {
             if let handoffContext {
                 HandoffPresentationSheet(
                     presentationTitle: presentation.title,
                     revisionNumber: currentTalkRevisionNumber,
                     sectionDraft: normalizedDraft,
                     handoffContext: previewHandoffContext(from: handoffContext),
-                    totalSections: orderedSections.count
+                    totalSections: orderedSections.count,
+                    onStartPractice: {
+                        pendingStartPracticeFromHandoff = true
+                    }
                 )
             }
         }
@@ -157,7 +174,8 @@ struct ScriptEditor: View {
                 ScriptEditorHandoffSection(
                     handoff: handoff,
                     handoffCue: $draftHandoffCue,
-                    onPresentHandoff: { showingHandoffPreview = true }
+                    onPresentHandoff: { showingHandoffPreview = true },
+                    onStartPractice: startPracticePreservingDraft
                 )
             }
             ScriptEditorDetailsSection(
@@ -217,11 +235,45 @@ struct ScriptEditor: View {
         Spacer()
 
         Button {
+            startPracticePreservingDraft()
+        } label: {
+            Label("Practice", systemImage: "mic.fill")
+        }
+        .disabled(currentSection == nil)
+        .accessibilityLabel("Practice Section")
+        .accessibilityHint("Opens offline practice without discarding unsaved script edits.")
+        .accessibilityIdentifier("toolbarPracticeSectionButton")
+
+        Spacer()
+
+        Button {
             if let nextSectionID { requestNavigation(to: nextSectionID) }
         } label: {
             Label("Next Section", systemImage: "chevron.right")
         }
         .disabled(nextSectionID == nil)
         .accessibilityIdentifier("nextSectionButton")
+    }
+
+    private func handlePendingHandoffPractice() {
+        guard pendingStartPracticeFromHandoff else { return }
+        pendingStartPracticeFromHandoff = false
+        startPracticePreservingDraft()
+    }
+
+    private func startPracticePreservingDraft() {
+        guard let talkRevision = store.currentTalkRevision(for: presentation),
+              let section = currentSection else {
+            return
+        }
+        let target = PracticeTarget(
+            presentationID: presentation.id,
+            sectionID: section.sectionID,
+            talkRevisionID: talkRevision.id,
+            sectionRevisionID: section.revisionID,
+            initialMode: .cueWords,
+            hasUnsavedEditorDraft: hasUnsavedChanges
+        )
+        onPracticeSection(target)
     }
 }
