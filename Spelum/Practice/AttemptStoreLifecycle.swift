@@ -10,7 +10,9 @@ extension AttemptStore {
         practiceMode: PracticeMode,
         isSilentRecall: Bool,
         startedAt: Date = Date(),
-        attemptID: UUID = UUID()
+        attemptID: UUID = UUID(),
+        attemptKind: AttemptKind = .section,
+        fullRunPayload: FullRunAttemptPayload? = nil
     ) throws -> AttemptRecord {
         let relativePath: String?
         if isSilentRecall {
@@ -28,23 +30,45 @@ extension AttemptStore {
                 practiceMode: practiceMode,
                 status: .inProgress,
                 relativeAudioPath: relativePath,
-                isSilentRecall: isSilentRecall
+                isSilentRecall: isSilentRecall,
+                attemptKind: attemptKind,
+                fullRunPayload: fullRunPayload
             )
             modelContext.insert(record)
             return record
         }
     }
 
+    func updateInProgressFullRunState(
+        attemptID: UUID,
+        fullRunPayload: FullRunAttemptPayload,
+        elapsedDuration: TimeInterval,
+        revealCount: Int,
+        markers: [AttemptMarker]
+    ) throws {
+        try performAtomicWrite {
+            guard let existing = try attempt(withID: attemptID), !existing.status.isFinalized else {
+                return
+            }
+            existing.attemptKindRawValue = AttemptKind.fullRun.rawValue
+            existing.updateFullRunPayload(fullRunPayload)
+            existing.elapsedDuration = max(existing.elapsedDuration, elapsedDuration.isFinite ? elapsedDuration : 0)
+            existing.revealCount = max(0, revealCount)
+            existing.updateMarkers(markers)
+        }
+    }
+
     @discardableResult
     func finalizeAttempt(_ input: AttemptFinalizationInput) throws -> AttemptRecord {
         let outcome = evaluateFinalizationOutcome(for: input)
+        let normalizedPayload = normalizedFullRunPayload(for: input, outcome: outcome)
 
         do {
             let record = try performAtomicWrite {
                 let target: AttemptRecord
                 if let existing = try attempt(withID: input.id) {
                     target = existing
-                    apply(input: input, outcome: outcome, to: target)
+                    apply(input: input, outcome: outcome, fullRunPayload: normalizedPayload, to: target)
                 } else {
                     target = AttemptRecord(
                         id: input.id,
@@ -59,7 +83,9 @@ extension AttemptStore {
                         revealCount: input.revealCount,
                         markers: input.markers,
                         interruptionReason: outcome.interruptionReason,
-                        isSilentRecall: input.isSilentRecall
+                        isSilentRecall: input.isSilentRecall,
+                        attemptKind: input.attemptKind,
+                        fullRunPayload: normalizedPayload
                     )
                     modelContext.insert(target)
                 }
@@ -84,7 +110,9 @@ extension AttemptStore {
                 markers: input.markers,
                 isSilentRecall: input.isSilentRecall,
                 interrupted: input.interrupted,
-                interruptionReason: input.interruptionReason
+                interruptionReason: input.interruptionReason,
+                attemptKind: input.attemptKind,
+                fullRunPayload: normalizedPayload
             )
             writePendingSaveManifest(manifest)
             throw error
@@ -218,9 +246,28 @@ private extension AttemptStore {
         )
     }
 
+    func normalizedFullRunPayload(
+        for input: AttemptFinalizationInput,
+        outcome: FinalizationOutcome
+    ) -> FullRunAttemptPayload? {
+        guard input.attemptKind == .fullRun, let payload = input.fullRunPayload else {
+            return nil
+        }
+        let finalDuration = outcome.playableDuration > 0
+            ? outcome.playableDuration
+            : max(input.elapsedDuration, 0)
+        return FullRunTimelineNormalizer.normalize(
+            payload: payload,
+            finalDuration: finalDuration,
+            interrupted: outcome.status == .interrupted,
+            isSilentRecall: input.isSilentRecall
+        )
+    }
+
     func apply(
         input: AttemptFinalizationInput,
         outcome: FinalizationOutcome,
+        fullRunPayload: FullRunAttemptPayload?,
         to record: AttemptRecord
     ) {
         record.presentationID = input.snapshot.presentationID
@@ -240,5 +287,7 @@ private extension AttemptStore {
         record.updateMarkers(input.markers)
         record.interruptionReason = outcome.interruptionReason
         record.isSilentRecall = input.isSilentRecall
+        record.attemptKindRawValue = input.attemptKind.rawValue
+        record.updateFullRunPayload(fullRunPayload)
     }
 }

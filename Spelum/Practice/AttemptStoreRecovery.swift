@@ -201,7 +201,9 @@ private extension AttemptStore {
             markers: manifest.markers,
             isSilentRecall: manifest.isSilentRecall,
             interrupted: true,
-            interruptionReason: reason
+            interruptionReason: reason,
+            attemptKind: manifest.resolvedAttemptKind,
+            fullRunPayload: manifest.fullRunPayload
         )
         let recovered = try finalizeAttempt(input)
         if recovered.hasPlayableAudio {
@@ -248,7 +250,9 @@ private extension AttemptStore {
             markers: pending.markers,
             isSilentRecall: pending.isSilentRecall,
             interrupted: true,
-            interruptionReason: reason
+            interruptionReason: reason,
+            attemptKind: pending.attemptKind,
+            fullRunPayload: pending.fullRunPayload
         )
         let recovered = try finalizeAttempt(input)
         if recovered.hasPlayableAudio {

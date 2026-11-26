@@ -185,6 +185,8 @@ struct PendingSaveRecovery: Equatable, Sendable {
     let isSilentRecall: Bool
     let interrupted: Bool
     let interruptionReason: String?
+    let attemptKind: AttemptKind
+    let fullRunPayload: FullRunAttemptPayload?
     let errorMessage: String
     let discardErrorMessage: String?
 
@@ -207,6 +209,8 @@ struct PendingSaveRecovery: Equatable, Sendable {
         self.isSilentRecall = input.isSilentRecall
         self.interrupted = input.interrupted
         self.interruptionReason = input.interruptionReason
+        self.attemptKind = input.attemptKind
+        self.fullRunPayload = input.fullRunPayload
         self.errorMessage = errorMessage
         self.discardErrorMessage = discardErrorMessage
     }
@@ -225,6 +229,8 @@ struct PendingSaveRecovery: Equatable, Sendable {
         isSilentRecall: Bool,
         interrupted: Bool,
         interruptionReason: String?,
+        attemptKind: AttemptKind,
+        fullRunPayload: FullRunAttemptPayload?,
         errorMessage: String,
         discardErrorMessage: String?
     ) {
@@ -241,6 +247,8 @@ struct PendingSaveRecovery: Equatable, Sendable {
         self.isSilentRecall = isSilentRecall
         self.interrupted = interrupted
         self.interruptionReason = interruptionReason
+        self.attemptKind = attemptKind
+        self.fullRunPayload = fullRunPayload
         self.errorMessage = errorMessage
         self.discardErrorMessage = discardErrorMessage
     }
@@ -264,6 +272,8 @@ struct PendingSaveRecovery: Equatable, Sendable {
             isSilentRecall: isSilentRecall,
             interrupted: interrupted,
             interruptionReason: interruptionReason,
+            attemptKind: attemptKind,
+            fullRunPayload: fullRunPayload,
             errorMessage: errorMessage,
             discardErrorMessage: message
         )

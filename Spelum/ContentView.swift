@@ -5,6 +5,8 @@ enum LibraryRoute: Hashable {
     case presentation(UUID)
     case section(presentationID: UUID, sectionID: UUID)
     case practice(PracticeTarget)
+    case fullRun(FullRunTarget)
+    case history(presentationID: UUID, initialFilter: AttemptHistoryFilter, anchorAttemptID: UUID?)
     case review(attemptID: UUID)
 }
 
@@ -161,65 +163,6 @@ struct ContentView: View {
         .listStyle(.insetGrouped)
     }
 
-    @ViewBuilder
-    private func destinationView(for route: LibraryRoute) -> some View {
-        switch route {
-        case .presentation(let presentationID):
-            if let presentation = presentations.first(where: { $0.id == presentationID }) {
-                PresentationDetailView(
-                    presentation: presentation,
-                    onSelectSection: { sectionID in
-                        navigationPath.append(
-                            .section(presentationID: presentation.id, sectionID: sectionID)
-                        )
-                    },
-                    onPracticeSection: { target in
-                        navigationPath.append(.practice(target))
-                    },
-                    onOpenReview: { attemptID in
-                        navigationPath.append(.review(attemptID: attemptID))
-                    }
-                )
-            } else {
-                missingPresentationView
-            }
-        case .section(let presentationID, let sectionID):
-            if let presentation = presentations.first(where: { $0.id == presentationID }) {
-                ScriptEditor(
-                    presentation: presentation,
-                    sectionID: sectionID,
-                    onNavigateToSection: { nextSectionID in
-                        replaceCurrentSectionRoute(
-                            presentationID: presentation.id,
-                            sectionID: nextSectionID
-                        )
-                    },
-                    onPracticeSection: { target in
-                        navigationPath.append(.practice(target))
-                    }
-                )
-            } else {
-                missingPresentationView
-            }
-        case .practice(let target):
-            if let presentation = presentations.first(where: { $0.id == target.presentationID }) {
-                PracticeView(
-                    presentation: presentation,
-                    target: target,
-                    onOpenReview: { attemptID in
-                        navigationPath.append(.review(attemptID: attemptID))
-                    }
-                )
-            } else {
-                missingPresentationView
-            }
-        case .review(let attemptID):
-            TakeReview(attemptID: attemptID) { retryTarget in
-                navigateToRetry(retryTarget)
-            }
-        }
-    }
-
     private var missingPresentationView: some View {
         ContentUnavailableView(
             "Presentation Not Found",
@@ -230,6 +173,159 @@ struct ContentView: View {
 }
 
 private extension ContentView {
+    @ViewBuilder
+    func destinationView(for route: LibraryRoute) -> some View {
+        switch route {
+        case .presentation(let presentationID):
+            presentationDestination(for: presentationID)
+        case .section(let presentationID, let sectionID):
+            sectionDestination(presentationID: presentationID, sectionID: sectionID)
+        case .practice(let target):
+            practiceDestination(for: target)
+        case .fullRun(let target):
+            fullRunDestination(for: target)
+        case .history(let presentationID, let initialFilter, let anchorAttemptID):
+            historyDestination(
+                presentationID: presentationID,
+                initialFilter: initialFilter,
+                anchorAttemptID: anchorAttemptID
+            )
+        case .review(let attemptID):
+            TakeReview(
+                attemptID: attemptID,
+                onRetry: { retryTarget in
+                    navigateToRetry(retryTarget)
+                },
+                onRetryFullRun: { retryTarget in
+                    navigateToFullRunRetry(retryTarget)
+                },
+                onCompare: { presentationID, filter, anchorID in
+                    navigationPath.append(
+                        .history(
+                            presentationID: presentationID,
+                            initialFilter: filter,
+                            anchorAttemptID: anchorID
+                        )
+                    )
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    func presentationDestination(for presentationID: UUID) -> some View {
+        if let presentation = presentations.first(where: { $0.id == presentationID }) {
+            PresentationDetailView(
+                presentation: presentation,
+                onSelectSection: { sectionID in
+                    navigationPath.append(
+                        .section(presentationID: presentation.id, sectionID: sectionID)
+                    )
+                },
+                onPracticeSection: { target in
+                    navigationPath.append(.practice(target))
+                },
+                onOpenReview: { attemptID in
+                    navigationPath.append(.review(attemptID: attemptID))
+                },
+                onStartFullRun: { target in
+                    navigationPath.append(.fullRun(target))
+                },
+                onOpenHistory: { filter, anchorID in
+                    navigationPath.append(
+                        .history(
+                            presentationID: presentation.id,
+                            initialFilter: filter,
+                            anchorAttemptID: anchorID
+                        )
+                    )
+                }
+            )
+        } else {
+            missingPresentationView
+        }
+    }
+
+    @ViewBuilder
+    func sectionDestination(presentationID: UUID, sectionID: UUID) -> some View {
+        if let presentation = presentations.first(where: { $0.id == presentationID }) {
+            ScriptEditor(
+                presentation: presentation,
+                sectionID: sectionID,
+                onNavigateToSection: { nextSectionID in
+                    replaceCurrentSectionRoute(
+                        presentationID: presentation.id,
+                        sectionID: nextSectionID
+                    )
+                },
+                onPracticeSection: { target in
+                    navigationPath.append(.practice(target))
+                }
+            )
+        } else {
+            missingPresentationView
+        }
+    }
+
+    @ViewBuilder
+    func practiceDestination(for target: PracticeTarget) -> some View {
+        if let presentation = presentations.first(where: { $0.id == target.presentationID }) {
+            PracticeView(
+                presentation: presentation,
+                target: target,
+                onOpenReview: { attemptID in
+                    navigationPath.append(.review(attemptID: attemptID))
+                }
+            )
+        } else {
+            missingPresentationView
+        }
+    }
+
+    @ViewBuilder
+    func fullRunDestination(for target: FullRunTarget) -> some View {
+        if let presentation = presentations.first(where: { $0.id == target.presentationID }) {
+            FullRunView(
+                presentation: presentation,
+                target: target,
+                onOpenReview: { attemptID in
+                    navigationPath.append(.review(attemptID: attemptID))
+                },
+                onOpenHistory: { filter, anchorID in
+                    navigationPath.append(
+                        .history(
+                            presentationID: presentation.id,
+                            initialFilter: filter,
+                            anchorAttemptID: anchorID
+                        )
+                    )
+                }
+            )
+        } else {
+            missingPresentationView
+        }
+    }
+
+    @ViewBuilder
+    func historyDestination(
+        presentationID: UUID,
+        initialFilter: AttemptHistoryFilter,
+        anchorAttemptID: UUID?
+    ) -> some View {
+        if let presentation = presentations.first(where: { $0.id == presentationID }) {
+            AttemptHistory(
+                presentation: presentation,
+                initialFilter: initialFilter,
+                anchorAttemptID: anchorAttemptID,
+                onOpenReview: { attemptID in
+                    navigationPath.append(.review(attemptID: attemptID))
+                }
+            )
+        } else {
+            missingPresentationView
+        }
+    }
+
     func replaceCurrentSectionRoute(presentationID: UUID, sectionID: UUID) {
         if !navigationPath.isEmpty {
             navigationPath[navigationPath.count - 1] = .section(
@@ -268,6 +364,20 @@ private extension ContentView {
         }
     }
 
+    func navigateToFullRunRetry(_ target: FullRunTarget) {
+        if navigationPath.count >= 2,
+           case .review = navigationPath[navigationPath.count - 1],
+           case .fullRun(let previousTarget) = navigationPath[navigationPath.count - 2],
+           previousTarget.presentationID == target.presentationID {
+            navigationPath[navigationPath.count - 2] = .fullRun(target)
+            navigationPath.removeLast()
+        } else if !navigationPath.isEmpty, case .review = navigationPath[navigationPath.count - 1] {
+            navigationPath[navigationPath.count - 1] = .fullRun(target)
+        } else {
+            navigationPath.append(.fullRun(target))
+        }
+    }
+
     func deletePresentation(_ presentation: PresentationRecord) {
         errorMessage = nil
         do {
@@ -275,50 +385,6 @@ private extension ContentView {
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-}
-
-private struct PresentationLibraryRow: View {
-    let presentation: PresentationRecord
-    let sectionCount: Int
-    let revisionNumber: Int
-    let speakerCount: Int
-    let isAccessibilitySize: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(presentation.title)
-                .font(.headline)
-
-            if isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(sectionsLabel)
-                    Text(speakersLabel)
-                    Text("Revision \(revisionNumber)")
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            } else {
-                Text("\(sectionsLabel) · \(speakersLabel) · Rev \(revisionNumber)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Updated \(presentation.updatedAt.formatted(date: .abbreviated, time: .shortened))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("Opens ordered sections and handoff preparation.")
-    }
-
-    private var sectionsLabel: String {
-        sectionCount == 1 ? "1 section" : "\(sectionCount) sections"
-    }
-
-    private var speakersLabel: String {
-        speakerCount <= 1 ? "1 speaker" : "\(speakerCount) speakers"
     }
 }
 
