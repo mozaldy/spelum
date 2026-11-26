@@ -327,6 +327,10 @@ private extension AttemptComparisonView {
             ) {
                 firstAttemptID = pair.earlierID
                 secondAttemptID = pair.laterID
+            } else if let remainingAnchor,
+                      let fallbackPartner = finalizedAttempts.first(where: { $0.id != remainingAnchor }) {
+                firstAttemptID = remainingAnchor
+                secondAttemptID = fallbackPartner.id
             } else if finalizedAttempts.count >= 2 {
                 firstAttemptID = finalizedAttempts[1].id
                 secondAttemptID = finalizedAttempts[0].id

@@ -223,14 +223,16 @@ private extension AttemptComparisonEngine {
         }
 
         let earlierByRev = Dictionary(
-            uniqueKeysWithValues: earlierPayload.transitions.map { ($0.sectionRevisionID, $0) }
+            earlierPayload.transitions.map { ($0.sectionRevisionID, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         let earlierBySec = Dictionary(
             earlierPayload.transitions.map { ($0.sectionID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         let laterByRev = Dictionary(
-            uniqueKeysWithValues: laterPayload.transitions.map { ($0.sectionRevisionID, $0) }
+            laterPayload.transitions.map { ($0.sectionRevisionID, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         let laterBySec = Dictionary(
             laterPayload.transitions.map { ($0.sectionID, $0) },

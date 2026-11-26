@@ -277,7 +277,8 @@ private extension AttemptHistory {
             comparisonSecondID = pair.laterID
         } else {
             comparisonFirstID = anchorAttemptID
-            comparisonSecondID = presentationAttempts.first(where: { $0.id != anchorAttemptID })?.id
+            comparisonSecondID = filteredAttempts.first(where: { $0.id != anchorAttemptID })?.id
+                ?? presentationAttempts.first(where: { $0.id != anchorAttemptID })?.id
         }
         showingComparisonSheet = true
     }

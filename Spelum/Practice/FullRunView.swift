@@ -252,7 +252,17 @@ struct FullRunView: View {
             errorMessage: historyErrorMessage,
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
             onOpenReview: onOpenReview,
-            onOpenCompare: { onOpenHistory(.fullRuns, presentationFullRuns.first?.id) },
+            onOpenCompare: {
+                let descriptors = presentationFullRuns.map(ComparableAttemptDescriptor.init(record:))
+                let defaultPair = AttemptComparisonEngine.defaultComparablePair(
+                    from: descriptors,
+                    filter: .fullRuns,
+                    anchorAttemptID: nil,
+                    currentTalkRevisionID: presentation.currentRevisionID,
+                    currentSectionRevisionIDs: []
+                )
+                onOpenHistory(.fullRuns, defaultPair?.laterID ?? presentationFullRuns.first?.id)
+            },
             onRequestDelete: { attemptPendingDelete = $0 }
         )
     }
