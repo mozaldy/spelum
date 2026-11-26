@@ -231,7 +231,9 @@ extension PresentationStore {
     }
 
     func deletePresentation(_ presentation: PresentationRecord) throws {
+        let presentationID = presentation.id
         try performAtomicWrite {
+            try CoachingStore(modelContext: modelContext).deleteCues(forPresentationID: presentationID)
             modelContext.delete(presentation)
         }
     }

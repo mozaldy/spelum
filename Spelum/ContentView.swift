@@ -17,6 +17,7 @@ struct ContentView: View {
 
     @State private var navigationPath: [LibraryRoute] = []
     @State private var showingImportSheet = false
+    @State private var showingCoachEvaluation = false
     @State private var presentationPendingDelete: PresentationRecord?
     @State private var errorMessage: String?
 
@@ -39,6 +40,21 @@ struct ContentView: View {
             }
             .navigationTitle("Presentations")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button {
+                            showingCoachEvaluation = true
+                        } label: {
+                            Label("Blinded Coach Evaluation", systemImage: "checklist")
+                        }
+                        .accessibilityIdentifier("openCoachEvaluationMenuButton")
+                    } label: {
+                        Label("Internal Tools", systemImage: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Internal Tools")
+                    .accessibilityHint("Opens internal blinded evaluation tools for on-device coaching.")
+                    .accessibilityIdentifier("internalToolsMenuButton")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showingImportSheet = true
@@ -57,6 +73,9 @@ struct ContentView: View {
                 ImportScriptSheet { importedPresentationID in
                     navigationPath = [.presentation(importedPresentationID)]
                 }
+            }
+            .sheet(isPresented: $showingCoachEvaluation) {
+                CoachingEvaluationView()
             }
             .confirmationDialog(
                 "Delete “\(presentationPendingDelete?.title ?? "Presentation")”?",
@@ -208,8 +227,10 @@ struct ContentView: View {
             description: Text("This presentation may have been deleted.")
         )
     }
+}
 
-    private func replaceCurrentSectionRoute(presentationID: UUID, sectionID: UUID) {
+private extension ContentView {
+    func replaceCurrentSectionRoute(presentationID: UUID, sectionID: UUID) {
         if !navigationPath.isEmpty {
             navigationPath[navigationPath.count - 1] = .section(
                 presentationID: presentationID,
@@ -223,7 +244,7 @@ struct ContentView: View {
         }
     }
 
-    private func navigateToRetry(_ target: PracticeTarget) {
+    func navigateToRetry(_ target: PracticeTarget) {
         if navigationPath.count >= 2,
            case .review = navigationPath[navigationPath.count - 1],
            case .practice(let previousTarget) = navigationPath[navigationPath.count - 2],
@@ -247,7 +268,7 @@ struct ContentView: View {
         }
     }
 
-    private func deletePresentation(_ presentation: PresentationRecord) {
+    func deletePresentation(_ presentation: PresentationRecord) {
         errorMessage = nil
         do {
             try attemptStore.deletePresentationAndAttempts(presentation)
