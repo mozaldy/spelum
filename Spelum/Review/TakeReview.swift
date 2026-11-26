@@ -8,6 +8,8 @@ struct TakeReview: View {
 
     let attemptID: UUID
     let onRetry: (PracticeTarget) -> Void
+    let onRetryFullRun: (FullRunTarget) -> Void
+    let onCompare: (UUID, AttemptHistoryFilter, UUID) -> Void
 
     @State private var player = TakeAudioPlayer()
     @State private var analysisCoordinator: TakeAnalysisCoordinator
@@ -18,10 +20,14 @@ struct TakeReview: View {
     init(
         attemptID: UUID,
         transcriber: (any TakeTranscribing)? = nil,
-        onRetry: @escaping (PracticeTarget) -> Void
+        onRetry: @escaping (PracticeTarget) -> Void,
+        onRetryFullRun: @escaping (FullRunTarget) -> Void = { _ in },
+        onCompare: @escaping (UUID, AttemptHistoryFilter, UUID) -> Void = { _, _, _ in }
     ) {
         self.attemptID = attemptID
         self.onRetry = onRetry
+        self.onRetryFullRun = onRetryFullRun
+        self.onCompare = onCompare
         self._analysisCoordinator = State(
             initialValue: TakeAnalysisCoordinator(transcriber: transcriber)
         )
@@ -43,6 +49,12 @@ struct TakeReview: View {
         try? attemptStore.attempt(withID: attemptID)
     }
 
+    private var canCompareWithOtherAttempt: Bool {
+        guard let attempt else { return false }
+        let all = (try? attemptStore.fetchAttempts(forPresentationID: attempt.presentationID)) ?? []
+        return all.count >= 2
+    }
+
     var body: some View {
         Group {
             if let attempt {
@@ -55,7 +67,7 @@ struct TakeReview: View {
                 )
             }
         }
-        .navigationTitle("Take Review")
+        .navigationTitle(attempt?.isFullRun == true ? "Full Run Review" : "Take Review")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if attempt != nil {
@@ -65,22 +77,22 @@ struct TakeReview: View {
                     } label: {
                         Label("Delete Take", systemImage: "trash")
                     }
-                    .accessibilityLabel("Delete Take")
+                    .accessibilityLabel(attempt?.isFullRun == true ? "Delete Full Run" : "Delete Take")
                     .accessibilityIdentifier("deleteTakeToolbarButton")
                 }
             }
         }
         .confirmationDialog(
-            "Delete this rehearsal take?",
+            attempt?.isFullRun == true ? "Delete this full run?" : "Delete this rehearsal take?",
             isPresented: $showingDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete Take", role: .destructive) {
+            Button(attempt?.isFullRun == true ? "Delete Full Run" : "Delete Take", role: .destructive) {
                 deleteCurrentAttempt()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes only this take and its local audio recording from this device.")
+            Text("This removes only this attempt and its local audio recording from this device.")
         }
         .onAppear {
             loadAudioIfAvailable()
@@ -108,95 +120,122 @@ struct TakeReview: View {
                     errorBanner(actionErrorMessage)
                 }
 
-                TakeReviewHeaderCard(
-                    attempt: attempt,
-                    presentationTitle: context.presentationTitle,
-                    sectionTitle: context.sectionRevision?.title ?? attempt.sectionTitleSnapshot,
-                    isOlderRevision: context.isOlderRevision,
-                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
-                )
-
-                TakeReviewPlaybackCard(
-                    attempt: attempt,
-                    player: player,
-                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
-                )
-
-                analysisCard(for: context.analysisContext, totalDuration: context.totalDuration)
-
-                if let coachCoordinator {
-                    TakeReviewCoachingCard(
-                        coordinator: coachCoordinator,
-                        observations: context.currentObservations,
-                        isAudioLoaded: player.isLoaded,
-                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                        onSeekObservation: { observation in
-                            let target = observation.seekTarget(maxDuration: context.totalDuration)
-                            player.seek(to: target, autoPlay: true)
-                        },
-                        onRequestOnDevice: {
-                            coachCoordinator.requestOnDeviceSuggestion(attemptStore: attemptStore)
-                        }
-                    )
+                if let fullRunPayload = context.fullRunPayload {
+                    fullRunReviewCards(attempt: attempt, payload: fullRunPayload, context: context)
+                } else {
+                    sectionReviewCards(attempt: attempt, context: context)
                 }
 
-                TakeReviewFactsAndMarkers(
-                    attempt: attempt,
-                    isAudioLoaded: player.isLoaded,
-                    currentPlaybackTime: player.currentTime,
-                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                    onSeekMarker: { timestamp in player.seek(to: timestamp, autoPlay: true) },
-                    onAddMarkerAtCurrentTime: { addManualMarker(label: nil) }
-                )
-
-                if let handoff = context.handoff {
-                    PracticeHandoffCueCard(handoff: handoff)
+                if canCompareWithOtherAttempt {
+                    compareActionButton(for: attempt)
                 }
 
-                if let sectionRevision = context.sectionRevision {
-                    TakeReviewScriptCard(
-                        section: sectionRevision,
-                        revisionNumber: attempt.talkRevisionNumber
-                    )
-                }
-
-                retryActionButton(for: attempt)
+                retryActionButton(for: attempt, fullRunPayload: context.fullRunPayload)
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
     }
 
-    static func performDeletion(
+    @ViewBuilder
+    private func fullRunReviewCards(
         attempt: AttemptRecord,
-        attemptStore: AttemptStore,
-        player: TakeAudioPlayer,
-        analysisCoordinator: TakeAnalysisCoordinator? = nil,
-        coachCoordinator: PostTakeCoachCoordinator? = nil
-    ) throws {
-        let recoveryToken = analysisCoordinator?.prepareForDeletion(attemptID: attempt.id)
-        let coachRecoveryToken = coachCoordinator?.prepareForDeletion(attemptID: attempt.id)
-        player.pause()
-        do {
-            try attemptStore.deleteAttempt(attempt)
-            player.stop()
-        } catch {
-            if !player.isLoaded,
-               attempt.hasPlayableAudio,
-               let url = attemptStore.resolvedAudioURL(for: attempt) {
-                player.load(url: url)
+        payload: FullRunAttemptPayload,
+        context: TakeReviewDisplaySnapshot
+    ) -> some View {
+        FullRunReviewHeaderCard(
+            attempt: attempt,
+            payload: payload,
+            presentationTitle: context.presentationTitle,
+            isOlderRevision: context.isOlderRevision,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        )
+
+        TakeReviewPlaybackCard(
+            attempt: attempt,
+            player: player,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        )
+
+        FullRunReviewTimelineCard(
+            payload: payload,
+            isAudioLoaded: player.isLoaded,
+            currentPlaybackTime: player.currentTime,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            onSeekTransition: { transition in
+                player.seek(to: transition.startTime, autoPlay: true)
             }
-            if let recoveryToken {
-                let persisted = (try? attemptStore.attempt(withID: attempt.id))?.timingAnalysis
-                analysisCoordinator?.restoreAfterFailedDeletion(
-                    recoveryToken,
-                    persistedAnalysis: persisted
-                )
-            }
-            if let coachRecoveryToken {
-                coachCoordinator?.restoreAfterFailedDeletion(coachRecoveryToken)
-            }
-            throw error
+        )
+
+        analysisCard(for: context.analysisContext, totalDuration: context.totalDuration)
+
+        TakeReviewFactsAndMarkers(
+            attempt: attempt,
+            isAudioLoaded: player.isLoaded,
+            currentPlaybackTime: player.currentTime,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            onSeekMarker: { timestamp in player.seek(to: timestamp, autoPlay: true) },
+            onAddMarkerAtCurrentTime: { addManualMarker(label: nil) }
+        )
+
+        FullRunReviewScriptCard(snapshot: payload.snapshot)
+    }
+
+    @ViewBuilder
+    private func sectionReviewCards(
+        attempt: AttemptRecord,
+        context: TakeReviewDisplaySnapshot
+    ) -> some View {
+        TakeReviewHeaderCard(
+            attempt: attempt,
+            presentationTitle: context.presentationTitle,
+            sectionTitle: context.sectionRevision?.title ?? attempt.sectionTitleSnapshot,
+            isOlderRevision: context.isOlderRevision,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        )
+
+        TakeReviewPlaybackCard(
+            attempt: attempt,
+            player: player,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        )
+
+        analysisCard(for: context.analysisContext, totalDuration: context.totalDuration)
+
+        if let coachCoordinator {
+            TakeReviewCoachingCard(
+                coordinator: coachCoordinator,
+                observations: context.currentObservations,
+                isAudioLoaded: player.isLoaded,
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                onSeekObservation: { observation in
+                    let target = observation.seekTarget(maxDuration: context.totalDuration)
+                    player.seek(to: target, autoPlay: true)
+                },
+                onRequestOnDevice: {
+                    coachCoordinator.requestOnDeviceSuggestion(attemptStore: attemptStore)
+                }
+            )
+        }
+
+        TakeReviewFactsAndMarkers(
+            attempt: attempt,
+            isAudioLoaded: player.isLoaded,
+            currentPlaybackTime: player.currentTime,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            onSeekMarker: { timestamp in player.seek(to: timestamp, autoPlay: true) },
+            onAddMarkerAtCurrentTime: { addManualMarker(label: nil) }
+        )
+
+        if let handoff = context.handoff {
+            PracticeHandoffCueCard(handoff: handoff)
+        }
+
+        if let sectionRevision = context.sectionRevision {
+            TakeReviewScriptCard(
+                section: sectionRevision,
+                revisionNumber: attempt.talkRevisionNumber
+            )
         }
     }
 }
@@ -263,30 +302,31 @@ private extension TakeReview {
         )
     }
 
-    func retryActionButton(for attempt: AttemptRecord) -> some View {
-        Button {
+    func compareActionButton(for attempt: AttemptRecord) -> some View {
+        let filter: AttemptHistoryFilter = attempt.isFullRun ? .fullRuns : .sectionTakes
+        return TakeReviewCompareButton(isFullRun: attempt.isFullRun) {
+            player.pause()
+            onCompare(attempt.presentationID, filter, attempt.id)
+        }
+    }
+
+    func retryActionButton(
+        for attempt: AttemptRecord,
+        fullRunPayload: FullRunAttemptPayload?
+    ) -> some View {
+        TakeReviewRetryButton(
+            isFullRun: fullRunPayload != nil,
+            practiceModeName: attempt.practiceMode.displayName
+        ) {
             analysisCoordinator.handleViewDisappear()
             coachCoordinator?.handleViewDisappear()
             player.stop()
-            let target = PracticeTarget(
-                presentationID: attempt.presentationID,
-                sectionID: attempt.sectionID,
-                talkRevisionID: attempt.talkRevisionID,
-                sectionRevisionID: attempt.sectionRevisionID,
-                initialMode: attempt.practiceMode,
-                hasUnsavedEditorDraft: false,
-                retryToken: UUID()
-            )
-            onRetry(target)
-        } label: {
-            Label("Retry Section (\(attempt.practiceMode.displayName))", systemImage: "arrow.counterclockwise")
-                .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 50)
+            if let fullRunPayload {
+                onRetryFullRun(Self.makeFullRunRetryTarget(for: attempt, payload: fullRunPayload))
+            } else {
+                onRetry(Self.makeSectionRetryTarget(for: attempt))
+            }
         }
-        .buttonStyle(.borderedProminent)
-        .accessibilityLabel("Retry Section in \(attempt.practiceMode.displayName) mode")
-        .accessibilityHint("Starts a fresh rehearsal attempt on the same section revision and practice mode.")
-        .accessibilityIdentifier("retrySectionFromReviewButton")
     }
 
     func loadAudioIfAvailable() {
@@ -305,7 +345,7 @@ private extension TakeReview {
     }
 
     func refreshPostTakeCoach() {
-        guard let attempt else { return }
+        guard let attempt, !attempt.isFullRun else { return }
         let display = resolvedReviewDisplay(for: attempt)
         guard let sectionRevision = display.sectionRevision else { return }
         let coordinator: PostTakeCoachCoordinator

@@ -7,6 +7,7 @@ import Observation
 final class TakeAudioPlayer: NSObject {
     private let audioSessionManager: any AudioSessionManaging
     private let notificationCenter: NotificationCenter
+    private let playerVolume: Float
 
     private var player: AVAudioPlayer?
     private var progressTimer: Timer?
@@ -23,10 +24,12 @@ final class TakeAudioPlayer: NSObject {
 
     init(
         audioSessionManager: (any AudioSessionManaging)? = nil,
-        notificationCenter: NotificationCenter = .default
+        notificationCenter: NotificationCenter = .default,
+        playerVolume: Float = 1.0
     ) {
         self.audioSessionManager = audioSessionManager ?? SystemAudioSessionManager()
         self.notificationCenter = notificationCenter
+        self.playerVolume = min(max(playerVolume, 0), 1)
         super.init()
     }
 
@@ -47,6 +50,7 @@ final class TakeAudioPlayer: NSObject {
 
         do {
             let newPlayer = try AVAudioPlayer(contentsOf: url)
+            newPlayer.volume = playerVolume
             newPlayer.delegate = self
             guard newPlayer.prepareToPlay(), newPlayer.duration.isFinite, newPlayer.duration > 0 else {
                 newPlayer.delegate = nil

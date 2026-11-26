@@ -100,6 +100,7 @@ struct PracticeView: View {
     private var sectionAttempts: [AttemptRecord] {
         allAttempts.filter { attempt in
             attempt.presentationID == presentation.id &&
+            !attempt.isFullRun &&
             attempt.sectionID == target.sectionID &&
             attempt.status.isFinalized
         }

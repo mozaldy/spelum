@@ -9,17 +9,23 @@ struct PresentationDetailView: View {
     let onSelectSection: (UUID) -> Void
     let onPracticeSection: (PracticeTarget) -> Void
     let onOpenReview: (UUID) -> Void
+    let onStartFullRun: (FullRunTarget) -> Void
+    let onOpenHistory: (AttemptHistoryFilter, UUID?) -> Void
 
     init(
         presentation: PresentationRecord,
         onSelectSection: @escaping (UUID) -> Void,
         onPracticeSection: @escaping (PracticeTarget) -> Void = { _ in },
-        onOpenReview: @escaping (UUID) -> Void = { _ in }
+        onOpenReview: @escaping (UUID) -> Void = { _ in },
+        onStartFullRun: @escaping (FullRunTarget) -> Void = { _ in },
+        onOpenHistory: @escaping (AttemptHistoryFilter, UUID?) -> Void = { _, _ in }
     ) {
         self.presentation = presentation
         self.onSelectSection = onSelectSection
         self.onPracticeSection = onPracticeSection
         self.onOpenReview = onOpenReview
+        self.onStartFullRun = onStartFullRun
+        self.onOpenHistory = onOpenHistory
     }
 
     @Query(sort: \AttemptRecord.startedAt, order: .reverse)
@@ -46,8 +52,21 @@ struct PresentationDetailView: View {
         return store.orderedSections(in: currentRevision)
     }
 
+    private var handoffStartSection: SectionRevisionRecord? {
+        guard let currentRevision else { return nil }
+        return store.defaultPresenterHandoffSection(in: currentRevision)
+    }
+
     private var presentationAttempts: [AttemptRecord] {
         allAttempts.filter { $0.presentationID == presentation.id && $0.status.isFinalized }
+    }
+
+    private var fullRunCount: Int {
+        presentationAttempts.filter(\.isFullRun).count
+    }
+
+    private var sectionTakeCount: Int {
+        presentationAttempts.filter { !$0.isFullRun }.count
     }
 
     private var speakerSummary: String {
@@ -61,13 +80,24 @@ struct PresentationDetailView: View {
                 errorSection(message: errorMessage)
             }
             overviewSection
+            PresentationRehearsalSection(
+                sectionCount: orderedSections.count,
+                handoffStartSection: handoffStartSection,
+                attemptCount: presentationAttempts.count,
+                onStartFullRun: { startKind, sectionID in
+                    startFullRun(startKind: startKind, startingSectionID: sectionID)
+                },
+                onOpenHistory: { onOpenHistory(.all, nil) }
+            )
             sectionsListSection
             if !presentationAttempts.isEmpty {
                 PresentationRecentTakesSection(
                     attempts: presentationAttempts,
+                    currentTalkRevisionID: presentation.currentRevisionID,
                     currentSectionRevisionIDs: Set(orderedSections.map(\.revisionID)),
                     isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                    onOpenReview: onOpenReview
+                    onOpenReview: onOpenReview,
+                    onOpenHistory: { onOpenHistory(.all, nil) }
                 )
             }
         }
@@ -137,24 +167,6 @@ struct PresentationDetailView: View {
         }
     }
 
-    private func errorSection(message: String) -> some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("detailErrorLabel")
-                if let pendingFailedRename {
-                    Button("Retry Rename to “\(pendingFailedRename)”") {
-                        renameDraft = pendingFailedRename
-                        renamePresentation()
-                    }
-                    .font(.callout)
-                    .accessibilityIdentifier("retryRenameButton")
-                }
-            }
-        }
-    }
-
     private var overviewSection: some View {
         Section {
             LabeledContent(
@@ -163,8 +175,11 @@ struct PresentationDetailView: View {
             )
             LabeledContent("Sections", value: "\(orderedSections.count)")
             LabeledContent("Speakers", value: speakerSummary)
-            if !presentationAttempts.isEmpty {
-                LabeledContent("Saved Takes", value: "\(presentationAttempts.count)")
+            if fullRunCount > 0 {
+                LabeledContent("Saved Full Runs", value: "\(fullRunCount)")
+            }
+            if sectionTakeCount > 0 {
+                LabeledContent("Saved Section Takes", value: "\(sectionTakeCount)")
             }
 
             Button {
@@ -194,7 +209,9 @@ struct PresentationDetailView: View {
                 let handoff = currentRevision.flatMap {
                     store.handoffContext(forSectionID: section.sectionID, in: $0)
                 }
-                let takeCount = presentationAttempts.filter { $0.sectionID == section.sectionID }.count
+                let takeCount = presentationAttempts.filter {
+                    !$0.isFullRun && $0.sectionID == section.sectionID
+                }.count
                 Button {
                     onSelectSection(section.sectionID)
                 } label: {
@@ -244,6 +261,35 @@ struct PresentationDetailView: View {
 }
 
 private extension PresentationDetailView {
+    func errorSection(message: String) -> some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("detailErrorLabel")
+                if let pendingFailedRename {
+                    Button("Retry Rename to “\(pendingFailedRename)”") {
+                        renameDraft = pendingFailedRename
+                        renamePresentation()
+                    }
+                    .font(.callout)
+                    .accessibilityIdentifier("retryRenameButton")
+                }
+            }
+        }
+    }
+
+    func startFullRun(startKind: FullRunStartKind, startingSectionID: UUID?) {
+        let target = FullRunTarget(
+            presentationID: presentation.id,
+            talkRevisionID: currentRevision?.id,
+            startKind: startKind,
+            startingSectionID: startingSectionID,
+            initialMode: .cueWords
+        )
+        onStartFullRun(target)
+    }
+
     func startPractice(for section: SectionRevisionRecord) {
         let target = PracticeTarget(
             presentationID: presentation.id,

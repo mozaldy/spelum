@@ -118,6 +118,8 @@ struct AttemptFinalizationInput: Sendable {
     let isSilentRecall: Bool
     let interrupted: Bool
     let interruptionReason: String?
+    let attemptKind: AttemptKind
+    let fullRunPayload: FullRunAttemptPayload?
 
     init(
         id: UUID,
@@ -131,7 +133,9 @@ struct AttemptFinalizationInput: Sendable {
         markers: [AttemptMarker],
         isSilentRecall: Bool,
         interrupted: Bool,
-        interruptionReason: String?
+        interruptionReason: String?,
+        attemptKind: AttemptKind = .section,
+        fullRunPayload: FullRunAttemptPayload? = nil
     ) {
         self.id = id
         self.snapshot = snapshot
@@ -150,6 +154,8 @@ struct AttemptFinalizationInput: Sendable {
         self.isSilentRecall = isSilentRecall
         self.interrupted = interrupted
         self.interruptionReason = interruptionReason
+        self.attemptKind = attemptKind
+        self.fullRunPayload = fullRunPayload
     }
 }
 
@@ -166,6 +172,47 @@ struct PendingSaveManifest: Codable, Equatable, Sendable {
     let isSilentRecall: Bool
     let interrupted: Bool
     let interruptionReason: String?
+    let attemptKind: AttemptKind?
+    let fullRunPayload: FullRunAttemptPayload?
+
+    init(
+        attemptID: UUID,
+        snapshot: AttemptSnapshotReference,
+        practiceMode: PracticeMode,
+        startedAt: Date,
+        finishedAt: Date,
+        relativeAudioPath: String?,
+        elapsedDuration: TimeInterval,
+        revealCount: Int,
+        markers: [AttemptMarker],
+        isSilentRecall: Bool,
+        interrupted: Bool,
+        interruptionReason: String?,
+        attemptKind: AttemptKind? = nil,
+        fullRunPayload: FullRunAttemptPayload? = nil
+    ) {
+        self.attemptID = attemptID
+        self.snapshot = snapshot
+        self.practiceMode = practiceMode
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.relativeAudioPath = relativeAudioPath
+        self.elapsedDuration = elapsedDuration
+        self.revealCount = revealCount
+        self.markers = markers
+        self.isSilentRecall = isSilentRecall
+        self.interrupted = interrupted
+        self.interruptionReason = interruptionReason
+        self.attemptKind = attemptKind
+        self.fullRunPayload = fullRunPayload
+    }
+
+    var resolvedAttemptKind: AttemptKind {
+        if let attemptKind {
+            return attemptKind
+        }
+        return fullRunPayload != nil ? .fullRun : .section
+    }
 }
 
 struct AttemptRecoverySummary: Equatable, Sendable {
@@ -219,6 +266,8 @@ final class AttemptRecord {
     var interruptionReason: String?
     var isSilentRecall: Bool
     var timingAnalysisData: Data?
+    var attemptKindRawValue: String?
+    var fullRunData: Data?
 
     init(
         id: UUID = UUID(),
@@ -234,7 +283,9 @@ final class AttemptRecord {
         markers: [AttemptMarker] = [],
         interruptionReason: String? = nil,
         isSilentRecall: Bool = false,
-        timingAnalysisData: Data? = nil
+        timingAnalysisData: Data? = nil,
+        attemptKind: AttemptKind = .section,
+        fullRunPayload: FullRunAttemptPayload? = nil
     ) {
         self.id = id
         self.presentationID = snapshot.presentationID
@@ -255,6 +306,8 @@ final class AttemptRecord {
         self.interruptionReason = interruptionReason
         self.isSilentRecall = isSilentRecall
         self.timingAnalysisData = timingAnalysisData
+        self.attemptKindRawValue = attemptKind.rawValue
+        self.fullRunData = fullRunPayload.flatMap { try? JSONEncoder().encode($0) }
     }
 
     var practiceMode: PracticeMode {
@@ -263,6 +316,29 @@ final class AttemptRecord {
 
     var status: AttemptStatus {
         AttemptStatus(rawValue: statusRawValue) ?? .interrupted
+    }
+
+    var attemptKind: AttemptKind {
+        if let attemptKindRawValue, let parsed = AttemptKind(rawValue: attemptKindRawValue) {
+            return parsed
+        }
+        return fullRunData != nil ? .fullRun : .section
+    }
+
+    var isFullRun: Bool {
+        attemptKind == .fullRun
+    }
+
+    var fullRunPayload: FullRunAttemptPayload? {
+        guard let fullRunData else { return nil }
+        return try? JSONDecoder().decode(FullRunAttemptPayload.self, from: fullRunData)
+    }
+
+    var displayTitle: String {
+        if let payload = fullRunPayload {
+            return payload.snapshot.scopeTitle
+        }
+        return sectionTitleSnapshot
     }
 
     var markers: [AttemptMarker] {
@@ -310,44 +386,11 @@ final class AttemptRecord {
         markersData = Self.encodeMarkers(sorted)
     }
 
+    func updateFullRunPayload(_ payload: FullRunAttemptPayload?) {
+        fullRunData = payload.flatMap { try? JSONEncoder().encode($0) }
+    }
+
     private static func encodeMarkers(_ markers: [AttemptMarker]) -> Data {
         (try? JSONEncoder().encode(markers)) ?? Data()
-    }
-}
-
-enum RehearsalTimeFormatter {
-    static func clockString(for seconds: TimeInterval) -> String {
-        let clamped = max(0, seconds.isFinite ? seconds : 0)
-        let totalTenths = Int((clamped * 10).rounded(.down))
-        let minutes = totalTenths / 600
-        let remainingSeconds = (totalTenths % 600) / 10
-        let tenths = totalTenths % 10
-        return String(format: "%d:%02d.%d", minutes, remainingSeconds, tenths)
-    }
-
-    static func shortDurationString(for seconds: TimeInterval) -> String {
-        let clamped = max(0, seconds.isFinite ? seconds : 0)
-        let totalSeconds = Int(clamped.rounded())
-        let minutes = totalSeconds / 60
-        let remainingSeconds = totalSeconds % 60
-        return String(format: "%d:%02d", minutes, remainingSeconds)
-    }
-
-    static func accessibleDurationString(for seconds: TimeInterval) -> String {
-        let clamped = max(0, seconds.isFinite ? seconds : 0)
-        let minutes = Int(clamped) / 60
-        let remaining = clamped.truncatingRemainder(dividingBy: 60)
-        if minutes > 0 {
-            let wholeSeconds = Int(remaining.rounded())
-            let minuteUnit = minutes == 1 ? "minute" : "minutes"
-            let secondUnit = wholeSeconds == 1 ? "second" : "seconds"
-            return "\(minutes) \(minuteUnit) \(wholeSeconds) \(secondUnit)"
-        }
-        let roundedTenths = (remaining * 10).rounded() / 10
-        if roundedTenths == roundedTenths.rounded() {
-            let whole = Int(roundedTenths)
-            return whole == 1 ? "1 second" : "\(whole) seconds"
-        }
-        return String(format: "%.1f seconds", roundedTenths)
     }
 }

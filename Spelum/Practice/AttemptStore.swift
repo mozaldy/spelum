@@ -182,8 +182,24 @@ final class AttemptStore {
             },
             sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
         )
-        let fetched = try modelContext.fetch(descriptor)
+        let fetched = try modelContext.fetch(descriptor).filter { !$0.isFullRun }
         return includeInProgress ? fetched : fetched.filter { $0.status.isFinalized }
+    }
+
+    func fetchFullRuns(
+        forPresentationID presentationID: UUID,
+        includeInProgress: Bool = false
+    ) throws -> [AttemptRecord] {
+        try fetchAttempts(forPresentationID: presentationID, includeInProgress: includeInProgress)
+            .filter(\.isFullRun)
+    }
+
+    func fetchSectionTakes(
+        forPresentationID presentationID: UUID,
+        includeInProgress: Bool = false
+    ) throws -> [AttemptRecord] {
+        try fetchAttempts(forPresentationID: presentationID, includeInProgress: includeInProgress)
+            .filter { !$0.isFullRun }
     }
 
     func fetchAttempts(
