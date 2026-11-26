@@ -148,22 +148,52 @@ enum FullRunUpgradeTestHelpers {
         sqliteURL: URL
     ) throws -> Bool {
         var db: OpaquePointer?
-        guard sqlite3_open(sqliteURL.path, &db) == SQLITE_OK, let db else {
-            throw NSError(domain: "SQLiteTestHelper", code: 1)
+        let openRC = sqlite3_open_v2(sqliteURL.path, &db, SQLITE_OPEN_READONLY, nil)
+        guard openRC == SQLITE_OK, let db else {
+            if let db { sqlite3_close(db) }
+            throw NSError(domain: "SQLiteTestHelper", code: Int(openRC))
         }
         defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 5_000)
+
         var statement: OpaquePointer?
-        var hasColumn = false
-        if sqlite3_prepare_v2(db, "PRAGMA table_info(\(tableName));", -1, &statement, nil) == SQLITE_OK {
-            while sqlite3_step(statement) == SQLITE_ROW {
-                if let cName = sqlite3_column_text(statement, 1),
-                   String(cString: cName).uppercased() == columnName.uppercased() {
-                    hasColumn = true
+        let prepareRC = sqlite3_prepare_v2(db, "PRAGMA table_info(\(tableName));", -1, &statement, nil)
+        guard prepareRC == SQLITE_OK, let statement else {
+            let message = String(cString: sqlite3_errmsg(db))
+            throw NSError(
+                domain: "SQLiteTestHelper",
+                code: Int(prepareRC),
+                userInfo: [NSLocalizedDescriptionKey: "PRAGMA table_info failed: \(message)"]
+            )
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var columns: [String] = []
+        while true {
+            let stepRC = sqlite3_step(statement)
+            if stepRC == SQLITE_ROW {
+                if let cName = sqlite3_column_text(statement, 1) {
+                    columns.append(String(cString: cName).uppercased())
                 }
+            } else if stepRC == SQLITE_DONE {
+                break
+            } else {
+                let message = String(cString: sqlite3_errmsg(db))
+                throw NSError(
+                    domain: "SQLiteTestHelper",
+                    code: Int(stepRC),
+                    userInfo: [NSLocalizedDescriptionKey: "PRAGMA table_info step failed: \(message)"]
+                )
             }
         }
-        sqlite3_finalize(statement)
-        return hasColumn
+        guard !columns.isEmpty else {
+            throw NSError(
+                domain: "SQLiteTestHelper",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Table \(tableName) returned zero columns"]
+            )
+        }
+        return columns.contains(columnName.uppercased())
     }
 
     private static func makeBuildThreeAnalysis(
