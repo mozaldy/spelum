@@ -25,14 +25,6 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
         let promptVersion = task == .preparation
             ? SectionCoachService.preparationPromptVersion
             : SectionCoachService.postTakePromptVersion
-        let freshLaunch: Bool
-        if let override = isFreshProcessLaunch {
-            freshLaunch = override
-        } else {
-            freshLaunch = await CoachingEvaluationProcessState.shared.consumeFreshLaunchIfAvailable(
-                modelAvailable: availability.isAvailable
-            )
-        }
 
         let batch: SuiteBatchResult
         switch task {
@@ -41,6 +33,7 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
                 cases: dataset.preparationCases,
                 promptVersion: promptVersion,
                 isModelAvailable: availability.isAvailable,
+                isFreshProcessLaunchOverride: isFreshProcessLaunch,
                 rng: &rng,
                 onProgress: onProgress
             )
@@ -49,6 +42,7 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
                 cases: dataset.postTakeCases,
                 promptVersion: promptVersion,
                 isModelAvailable: availability.isAvailable,
+                isFreshProcessLaunchOverride: isFreshProcessLaunch,
                 rng: &rng,
                 onProgress: onProgress
             )
@@ -57,8 +51,7 @@ nonisolated final class CoachingEvaluationRunner: Sendable {
         let latencySummary = resolveLatencySummary(
             batch: batch,
             availability: availability,
-            environment: environment,
-            wasFreshLaunch: freshLaunch
+            environment: environment
         )
         let now = Date()
         return CoachingEvaluationSession(
@@ -92,6 +85,7 @@ private extension CoachingEvaluationRunner {
         let firstCallLatencyMS: Double?
         let subsequentLatenciesMS: [Double]
         let repeatResults: [RepeatVariationResult]
+        let wasFreshLaunch: Bool
     }
 
     struct LatencySummary {
@@ -103,8 +97,7 @@ private extension CoachingEvaluationRunner {
     func resolveLatencySummary(
         batch: SuiteBatchResult,
         availability: CoachingModelAvailability,
-        environment: CoachingDeviceEnvironment,
-        wasFreshLaunch: Bool
+        environment: CoachingDeviceEnvironment
     ) -> LatencySummary {
         guard availability.isAvailable else {
             return LatencySummary(status: .modelUnavailable, coldMS: nil, warmMS: [])
@@ -123,7 +116,7 @@ private extension CoachingEvaluationRunner {
                 warmMS: [firstLatency] + batch.subsequentLatenciesMS
             )
         }
-        if !wasFreshLaunch {
+        if !batch.wasFreshLaunch {
             return LatencySummary(
                 status: .processAlreadyWarmed,
                 coldMS: nil,
@@ -137,10 +130,29 @@ private extension CoachingEvaluationRunner {
         )
     }
 
+    func consumeLaunchOrderIfNeeded(
+        didConsume: inout Bool,
+        wasFreshLaunch: inout Bool,
+        isModelAvailable: Bool,
+        override: Bool?
+    ) async {
+        guard !Task.isCancelled, !didConsume, isModelAvailable else { return }
+        didConsume = true
+        if let override {
+            wasFreshLaunch = override
+        } else {
+            wasFreshLaunch = await CoachingEvaluationProcessState.shared.consumeFreshLaunchIfAvailable(
+                modelAvailable: true
+            )
+        }
+    }
+
+    // swiftlint:disable:next function_parameter_count
     func runPreparationBatch(
         cases: [PreparationEvaluationCase],
         promptVersion: String,
         isModelAvailable: Bool,
+        isFreshProcessLaunchOverride: Bool?,
         rng: inout SeededRandomGenerator,
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> SuiteBatchResult {
@@ -148,38 +160,32 @@ private extension CoachingEvaluationRunner {
         var firstCallLatency: Double?
         var subsequentLatencies: [Double] = []
         var repeatResults: [RepeatVariationResult] = []
+        var didConsumeLaunch = false
+        var wasFreshLaunch = false
         let total = cases.count
 
         for (index, evalCase) in cases.enumerated() {
             if Task.isCancelled { break }
             let request = evalCase.makeRequest(promptVersion: promptVersion)
             let authored = await coachService.generatePreparationCue(request: request, mode: .authoredBaseline)
-            let (modelCue, elapsedMS) = await timedPreparation(
-                request: request,
-                isModelAvailable: isModelAvailable
+            if Task.isCancelled { break }
+            await consumeLaunchOrderIfNeeded(
+                didConsume: &didConsumeLaunch,
+                wasFreshLaunch: &wasFreshLaunch,
+                isModelAvailable: isModelAvailable,
+                override: isFreshProcessLaunchOverride
             )
-            if index == 0 {
-                firstCallLatency = elapsedMS
-            } else if let elapsedMS {
+            let (modelCue, elapsedMS) = await timedPreparation(request: request, isModelAvailable: isModelAvailable)
+            if index == 0 { firstCallLatency = elapsedMS } else if let elapsedMS {
                 subsequentLatencies.append(elapsedMS)
             }
-            entries.append(
-                makeBlindedEntry(
-                    id: evalCase.id,
-                    category: evalCase.category,
-                    title: evalCase.title,
-                    sectionTitle: evalCase.sectionTitle,
-                    scriptText: evalCase.scriptText,
-                    handoffCueText: evalCase.handoffCueText,
-                    tags: evalCase.tags,
-                    expectsAbstention: evalCase.expectsAbstention,
-                    contextSummary: "Purpose: \(evalCase.purpose.displayName)",
-                    authored: authored,
-                    model: modelCue,
-                    latencyMS: elapsedMS,
-                    rng: &rng
-                )
+            let entry = EvaluationEntryMetadata(from: evalCase).makeBlindedEntry(
+                authored: authored,
+                model: modelCue,
+                latencyMS: elapsedMS,
+                modelFirst: (rng.next() & 1) == 0
             )
+            entries.append(entry)
             onProgress?(index + 1, total)
         }
 
@@ -196,14 +202,17 @@ private extension CoachingEvaluationRunner {
             entries: entries,
             firstCallLatencyMS: firstCallLatency,
             subsequentLatenciesMS: subsequentLatencies,
-            repeatResults: repeatResults
+            repeatResults: repeatResults,
+            wasFreshLaunch: wasFreshLaunch
         )
     }
 
+    // swiftlint:disable:next function_parameter_count
     func runPostTakeBatch(
         cases: [PostTakeEvaluationCase],
         promptVersion: String,
         isModelAvailable: Bool,
+        isFreshProcessLaunchOverride: Bool?,
         rng: inout SeededRandomGenerator,
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> SuiteBatchResult {
@@ -211,38 +220,32 @@ private extension CoachingEvaluationRunner {
         var firstCallLatency: Double?
         var subsequentLatencies: [Double] = []
         var repeatResults: [RepeatVariationResult] = []
+        var didConsumeLaunch = false
+        var wasFreshLaunch = false
         let total = cases.count
 
         for (index, evalCase) in cases.enumerated() {
             if Task.isCancelled { break }
             let request = evalCase.makeRequest(promptVersion: promptVersion)
             let authored = await coachService.generatePostTakeCue(request: request, mode: .authoredBaseline)
-            let (modelCue, elapsedMS) = await timedPostTake(
-                request: request,
-                isModelAvailable: isModelAvailable
+            if Task.isCancelled { break }
+            await consumeLaunchOrderIfNeeded(
+                didConsume: &didConsumeLaunch,
+                wasFreshLaunch: &wasFreshLaunch,
+                isModelAvailable: isModelAvailable,
+                override: isFreshProcessLaunchOverride
             )
-            if index == 0 {
-                firstCallLatency = elapsedMS
-            } else if let elapsedMS {
+            let (modelCue, elapsedMS) = await timedPostTake(request: request, isModelAvailable: isModelAvailable)
+            if index == 0 { firstCallLatency = elapsedMS } else if let elapsedMS {
                 subsequentLatencies.append(elapsedMS)
             }
-            entries.append(
-                makeBlindedEntry(
-                    id: evalCase.id,
-                    category: evalCase.category,
-                    title: evalCase.title,
-                    sectionTitle: evalCase.sectionTitle,
-                    scriptText: evalCase.scriptText,
-                    handoffCueText: evalCase.handoffCueText,
-                    tags: evalCase.tags,
-                    expectsAbstention: evalCase.expectsAbstention,
-                    contextSummary: postTakeContextSummary(for: evalCase),
-                    authored: authored,
-                    model: modelCue,
-                    latencyMS: elapsedMS,
-                    rng: &rng
-                )
+            let entry = EvaluationEntryMetadata(from: evalCase).makeBlindedEntry(
+                authored: authored,
+                model: modelCue,
+                latencyMS: elapsedMS,
+                modelFirst: (rng.next() & 1) == 0
             )
+            entries.append(entry)
             onProgress?(index + 1, total)
         }
 
@@ -259,7 +262,8 @@ private extension CoachingEvaluationRunner {
             entries: entries,
             firstCallLatencyMS: firstCallLatency,
             subsequentLatenciesMS: subsequentLatencies,
-            repeatResults: repeatResults
+            repeatResults: repeatResults,
+            wasFreshLaunch: wasFreshLaunch
         )
     }
 
@@ -329,63 +333,6 @@ private extension CoachingEvaluationRunner {
             suggestions: suggestions,
             latencies: trialLatencies
         )
-    }
-
-    // swiftlint:disable:next function_parameter_count
-    func makeBlindedEntry(
-        id: String,
-        category: CoachingCategory,
-        title: String,
-        sectionTitle: String,
-        scriptText: String,
-        handoffCueText: String?,
-        tags: [String],
-        expectsAbstention: Bool,
-        contextSummary: String,
-        authored: CoachingSuggestion,
-        model: CoachingSuggestion,
-        latencyMS: Double?,
-        rng: inout SeededRandomGenerator
-    ) -> BlindedEvaluationEntry {
-        let modelFirst = (rng.next() & 1) == 0
-        return BlindedEvaluationEntry(
-            id: id,
-            category: category,
-            title: title,
-            sectionTitle: sectionTitle,
-            scriptText: scriptText,
-            handoffCueText: handoffCueText,
-            tags: tags,
-            expectsAbstention: expectsAbstention,
-            contextSummary: contextSummary,
-            optionASource: modelFirst ? .onDeviceModel : .authoredBaseline,
-            optionBSource: modelFirst ? .authoredBaseline : .onDeviceModel,
-            optionASuggestion: modelFirst ? model : authored,
-            optionBSuggestion: modelFirst ? authored : model,
-            modelLatencyMilliseconds: latencyMS,
-            modelFellBackToAuthored: model.origin == .authoredFallback,
-            modelFallbackSummary: model.fallbackReason?.userSummary,
-            rating: nil
-        )
-    }
-
-    func postTakeContextSummary(for evalCase: PostTakeEvaluationCase) -> String {
-        var parts: [String] = [
-            "Status: \(evalCase.attemptStatus.displayName)",
-            "Mode: \(evalCase.practiceMode.displayName)",
-            "Duration: \(String(format: "%.1fs", evalCase.playableDuration))",
-            "Reveals: \(evalCase.revealCount)"
-        ]
-        if let wpm = evalCase.estimatedWordsPerMinute {
-            parts.append("Est. Pace: \(Int(wpm.rounded())) WPM")
-        }
-        if !evalCase.observations.isEmpty {
-            parts.append("Observations: \(evalCase.observations.count)")
-        }
-        if !evalCase.ambiguousNotes.isEmpty {
-            parts.append("Ambiguous notes: \(evalCase.ambiguousNotes.count)")
-        }
-        return parts.joined(separator: " · ")
     }
 
     func durationMilliseconds(_ duration: Duration) -> Double {

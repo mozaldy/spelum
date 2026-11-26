@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 nonisolated final class SectionCoachService: Sendable {
-    static let preparationPromptVersion = "prep-v2"
-    static let postTakePromptVersion = "review-v2"
+    static let preparationPromptVersion = "prep-v3"
+    static let postTakePromptVersion = "review-v3"
 
     let modelProvider: any CoachingModelProviding
     let policy: CoachingFeaturePolicy

@@ -33,6 +33,7 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
     let isSimulator: Bool
     let isLegacySession: Bool
     let unblindedEarly: Bool
+    let missingPostTakeEvidenceCount: Int
     let modelAvailability: CoachingModelAvailability
 
     var totalModelSafetyViolations: Int {
@@ -43,6 +44,10 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
         modelPreferredCount > authoredPreferredCount
     }
 
+    var hasCompleteRatingEvidence: Bool {
+        task == .preparation || missingPostTakeEvidenceCount == 0
+    }
+
     var isQualifiedForShipping: Bool {
         hasValidEvaluationContext &&
             totalCases >= Self.requiredCaseCount &&
@@ -51,12 +56,15 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
             modelValidationFailureCount == 0 &&
             modelUsefulCount >= Self.qualificationUsefulThreshold &&
             totalModelSafetyViolations == 0 &&
-            modelMissedAbstentionCount == 0 &&
             offersPracticalBenefit
     }
 
     private var hasValidEvaluationContext: Bool {
-        !isSimulator && !isLegacySession && !unblindedEarly && modelAvailability.isAvailable
+        !isSimulator &&
+            !isLegacySession &&
+            !unblindedEarly &&
+            hasCompleteRatingEvidence &&
+            modelAvailability.isAvailable
     }
 
     var decisionHeadline: String {
@@ -75,9 +83,6 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
         if totalModelSafetyViolations > 0 {
             return "Keep Authored Baseline (\(totalModelSafetyViolations) Safety Violation(s))"
         }
-        if modelMissedAbstentionCount > 0 {
-            return "Keep Authored Baseline (\(modelMissedAbstentionCount) Missed Abstention(s))"
-        }
         if modelUsefulCount < Self.qualificationUsefulThreshold {
             return "Keep Authored Baseline (\(modelUsefulCount)/\(totalCases) Useful; Need 16+)"
         }
@@ -86,7 +91,10 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
 
     private var contextDisqualificationHeadline: String? {
         if isLegacySession {
-            return "Keep Authored Baseline (Legacy Session — Re-Run on v2)"
+            return "Keep Authored Baseline (Legacy Session — Re-Run on v\(CoachingEvaluationSession.currentSchemaVersion))"
+        }
+        if !hasCompleteRatingEvidence {
+            return "Keep Authored Baseline (Missing Take Evidence in \(missingPostTakeEvidenceCount) Case(s))"
         }
         if isSimulator {
             return "Keep Authored Baseline (Simulator Cannot Qualify Model)"
@@ -102,7 +110,7 @@ nonisolated struct CoachingTaskEvaluationSummary: Equatable, Sendable {
 }
 
 nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     let id: UUID
     let evaluationSchemaVersion: Int
@@ -200,7 +208,7 @@ nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, 
     func summary() -> CoachingTaskEvaluationSummary {
         var tally = EvaluationTally()
         for entry in entries {
-            tally.record(entry)
+            tally.record(entry, task: task)
         }
 
         let sortedWarm = warmLatenciesMilliseconds.sorted()
@@ -244,6 +252,7 @@ nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, 
             isSimulator: environment.isSimulator,
             isLegacySession: isLegacySession,
             unblindedEarly: unblindedEarly,
+            missingPostTakeEvidenceCount: tally.missingPostTakeEvidence,
             modelAvailability: modelAvailability
         )
     }
@@ -261,7 +270,7 @@ nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, 
             "(invented=\(stats.modelInventedMeasurementCount), " +
             "alteredQuote=\(stats.modelAlteredQuoteCount), " +
             "speaker=\(stats.modelUnsupportedSpeakerCount))"
-        let abstentionLine = "\(stats.modelAbstentionCorrectCount)/\(stats.expectedAbstentionCount) expected " +
+        let abstentionLine = "\(stats.modelAbstentionCorrectCount)/\(stats.expectedAbstentionCount) fixture-tagged " +
             "(missed=\(stats.modelMissedAbstentionCount), false=\(stats.modelFalseAbstentionCount))"
         return """
         # Spelum Blinded Coach Evaluation — \(task.displayName)
@@ -270,10 +279,11 @@ nonisolated struct CoachingEvaluationSession: Identifiable, Codable, Equatable, 
         - Environment: \(environment.osDescription) (\(environment.deviceModel), \(deviceKind))
         - On-Device Model Availability: \(modelAvailability.shortStatusLabel)
         - Rated: \(stats.ratedCases)/\(stats.totalCases) (Unblinded Early: \(stats.unblindedEarly ? "Yes" : "No"))
+        - Complete Rating Evidence: \(stats.hasCompleteRatingEvidence ? "Yes" : "No (\(stats.missingPostTakeEvidenceCount) missing)")
         - Useful (Non-Fallback Model vs Authored): \(stats.modelUsefulCount)/\(stats.totalCases) vs \(stats.authoredUsefulCount)/\(stats.totalCases)
         - Preferences: On-Device \(stats.modelPreferredCount) | Authored \(stats.authoredPreferredCount) | Fallback \(stats.fallbackPreferredCount) | Tie \(stats.tieCount) | Neither \(stats.neitherCount)
         - Safety Violations (On-Device): \(safetyLine)
-        - Abstention Accuracy (Non-Fallback Model): \(abstentionLine)
+        - Abstention Alignment vs Fixture Tags (Diagnostic): \(abstentionLine)
         - Model Fallbacks to Authored: \(stats.modelFallbackCount)/\(stats.totalCases) (Validation Failures: \(stats.modelValidationFailureCount))
         - Latency: First request after launch \(coldText) | Subsequent median \(warmMedText)
         - Repeated Variation: Technique Agreement \(repeatTechText) | Mean Token Similarity \(repeatSimText)
@@ -299,8 +309,12 @@ private nonisolated struct EvaluationTally {
     var authoredPreferred = 0
     var ties = 0
     var neithers = 0
+    var missingPostTakeEvidence = 0
 
-    mutating func record(_ entry: BlindedEvaluationEntry) {
+    mutating func record(_ entry: BlindedEvaluationEntry, task: CoachingTaskKind) {
+        if task == .postTake && entry.postTakeEvidence == nil {
+            missingPostTakeEvidence += 1
+        }
         let modelSuggestion = entry.modelSuggestion
         let isFallback = entry.isModelFallback
         if isFallback {

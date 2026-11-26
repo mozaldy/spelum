@@ -113,54 +113,64 @@ struct Task6GroundingRegressionTests {
         #expect(gapEvidence.compatiblePassageIDs.contains(lumeraPassage.id))
     }
 
-    @Test("Finding 3C: Stale prep-v1 and review-v1 cached cues are ignored after v2 prompt bump")
+    @Test("Finding 3C: Stale v1 and v2 cached cues are ignored after v3 prompt bump")
     func stalePromptVersionCacheEntriesAreIgnored() throws {
         let container = try PresentationStore.makeModelContainer(inMemory: true)
         let store = CoachingStore(modelContext: container.mainContext)
         let prepReq = CoachingTestFixtures.makeSamplePreparationRequest()
-        let v1Prep = PreparationCoachingRequest(
-            presentationID: prepReq.presentationID,
-            sectionRevisionID: prepReq.sectionRevisionID,
-            talkRevisionID: prepReq.talkRevisionID,
-            sectionTitle: prepReq.sectionTitle,
-            scriptText: prepReq.scriptText,
-            exactPhrase: prepReq.exactPhrase,
-            cueWords: prepReq.cueWords,
-            purpose: prepReq.purpose,
-            handoffCueText: prepReq.handoffCueText,
-            isSpeakerChangeHandoff: prepReq.isSpeakerChangeHandoff,
-            knownSpeakerNames: prepReq.knownSpeakerNames,
-            selectedTechniqueID: prepReq.selectedTechniqueID,
-            candidateTechniques: prepReq.candidateTechniques,
-            promptVersion: "prep-v1"
-        )
-        try store.savePreparationCue(TechniqueLibrary.authoredPreparationSuggestion(for: v1Prep), for: v1Prep)
+        for legacyVersion in ["prep-v1", "prep-v2"] {
+            let legacyPrep = PreparationCoachingRequest(
+                presentationID: prepReq.presentationID,
+                sectionRevisionID: prepReq.sectionRevisionID,
+                talkRevisionID: prepReq.talkRevisionID,
+                sectionTitle: prepReq.sectionTitle,
+                scriptText: prepReq.scriptText,
+                exactPhrase: prepReq.exactPhrase,
+                cueWords: prepReq.cueWords,
+                purpose: prepReq.purpose,
+                handoffCueText: prepReq.handoffCueText,
+                isSpeakerChangeHandoff: prepReq.isSpeakerChangeHandoff,
+                knownSpeakerNames: prepReq.knownSpeakerNames,
+                selectedTechniqueID: prepReq.selectedTechniqueID,
+                candidateTechniques: prepReq.candidateTechniques,
+                promptVersion: legacyVersion
+            )
+            try store.savePreparationCue(
+                TechniqueLibrary.authoredPreparationSuggestion(for: legacyPrep),
+                for: legacyPrep
+            )
+        }
         #expect(try store.fetchCachedPreparationCue(for: prepReq) == nil)
 
         let postReq = CoachingTestFixtures.makeSamplePostTakeRequest(withObservation: true)
-        let v1Post = PostTakeCoachingRequest(
-            presentationID: postReq.presentationID,
-            attemptID: postReq.attemptID,
-            talkRevisionID: postReq.talkRevisionID,
-            sectionRevisionID: postReq.sectionRevisionID,
-            sectionTitle: postReq.sectionTitle,
-            scriptText: postReq.scriptText,
-            exactPhrase: postReq.exactPhrase,
-            cueWords: postReq.cueWords,
-            purpose: postReq.purpose,
-            handoffCueText: postReq.handoffCueText,
-            isSpeakerChangeHandoff: postReq.isSpeakerChangeHandoff,
-            knownSpeakerNames: postReq.knownSpeakerNames,
-            attemptStatus: postReq.attemptStatus,
-            practiceMode: postReq.practiceMode,
-            playableDuration: postReq.playableDuration,
-            revealCount: postReq.revealCount,
-            markers: postReq.markers,
-            timingAnalysis: postReq.timingAnalysis,
-            candidateTechniques: postReq.candidateTechniques,
-            promptVersion: "review-v1"
-        )
-        try store.savePostTakeCue(TechniqueLibrary.authoredPostTakeSuggestion(for: v1Post), for: v1Post)
+        for legacyVersion in ["review-v1", "review-v2"] {
+            let legacyPost = PostTakeCoachingRequest(
+                presentationID: postReq.presentationID,
+                attemptID: postReq.attemptID,
+                talkRevisionID: postReq.talkRevisionID,
+                sectionRevisionID: postReq.sectionRevisionID,
+                sectionTitle: postReq.sectionTitle,
+                scriptText: postReq.scriptText,
+                exactPhrase: postReq.exactPhrase,
+                cueWords: postReq.cueWords,
+                purpose: postReq.purpose,
+                handoffCueText: postReq.handoffCueText,
+                isSpeakerChangeHandoff: postReq.isSpeakerChangeHandoff,
+                knownSpeakerNames: postReq.knownSpeakerNames,
+                attemptStatus: postReq.attemptStatus,
+                practiceMode: postReq.practiceMode,
+                playableDuration: postReq.playableDuration,
+                revealCount: postReq.revealCount,
+                markers: postReq.markers,
+                timingAnalysis: postReq.timingAnalysis,
+                candidateTechniques: postReq.candidateTechniques,
+                promptVersion: legacyVersion
+            )
+            try store.savePostTakeCue(
+                TechniqueLibrary.authoredPostTakeSuggestion(for: legacyPost),
+                for: legacyPost
+            )
+        }
         #expect(try store.fetchCachedPostTakeCue(for: postReq) == nil)
     }
 

@@ -127,7 +127,11 @@ extension TechniqueLibrary {
     ) -> PhraseAnchor {
         if let exact = exactPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
            !exact.isEmpty,
-           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(exact, in: scriptText) {
+           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+               exact,
+               in: scriptText,
+               allowShortStandalone: true
+           ) {
             return PhraseAnchor(phrase: exact, fromHandoff: false)
         }
         if preferHandoff,

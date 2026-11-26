@@ -88,7 +88,7 @@ struct CoachingEvaluationCaseSheet: View {
     }
 
     private var caseContextCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(entry.displayTitle(at: caseIndex, isUnblinded: isUnblinded))
                     .font(.headline)
@@ -108,15 +108,23 @@ struct CoachingEvaluationCaseSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("evaluationCaseContextSummary")
 
-            if let handoff = entry.handoffCueText, !handoff.isEmpty {
+            if let exactPhrase = entry.exactPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !exactPhrase.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Handoff Cue")
+                    Text("Marked Exact Phrase")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text("“\(handoff)”")
-                        .font(.footnote)
+                    Text("“\(exactPhrase)”")
+                        .font(.footnote.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .accessibilityIdentifier("evaluationCaseMarkedPhrase")
+            }
+
+            handoffAndSpeakerBlock
+
+            if task == .postTake {
+                postTakeEvidenceBlock
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -131,6 +139,49 @@ struct CoachingEvaluationCaseSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var handoffAndSpeakerBlock: some View {
+        let speakerLine = entry.speakerContextSummary
+        let handoffText = entry.handoffCueText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasHandoff = !(handoffText?.isEmpty ?? true)
+        if speakerLine != nil || hasHandoff {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Handoff & Speaker Context")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let speakerLine {
+                    Text(speakerLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let handoffText, !handoffText.isEmpty {
+                    Text("Incoming cue: “\(handoffText)”")
+                        .font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityIdentifier("evaluationCaseHandoffContext")
+        }
+    }
+
+    @ViewBuilder
+    private var postTakeEvidenceBlock: some View {
+        if let evidence = entry.postTakeEvidence {
+            EvaluationPostTakeEvidenceView(evidence: evidence)
+        } else {
+            Label(
+                "Actual take evidence is unavailable in this saved session. " +
+                "Re-run on v\(CoachingEvaluationSession.currentSchemaVersion) before rating for qualification.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("evaluationMissingEvidenceBanner")
+        }
     }
 
     private var preferenceCard: some View {

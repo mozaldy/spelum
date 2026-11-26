@@ -355,11 +355,20 @@ private extension CoachingOutputValidator {
         scriptText: String,
         handoffCueText: String?
     ) -> Bool {
+        let allowShort = passage.role == .markedExactPhrase
         if passage.fromHandoff {
             guard let handoffCueText else { return false }
-            return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(passage.phrase, in: handoffCueText)
+            return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+                passage.phrase,
+                in: handoffCueText,
+                allowShortStandalone: allowShort
+            )
         }
-        return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(passage.phrase, in: scriptText)
+        return CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+            passage.phrase,
+            in: scriptText,
+            allowShortStandalone: allowShort
+        )
     }
 
     static func evidenceIDLooksLikeObservation(_ rawID: String?) -> Bool {

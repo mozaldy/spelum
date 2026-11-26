@@ -10,9 +10,27 @@ enum PracticeCoachingConcealmentState: Equatable, Sendable {
     case concealEntireCue
 }
 
+enum PracticeCoachingConcealmentReason: Equatable, Sendable {
+    case none
+    case memoryMode
+    case cueWordsHiddenBodyPassage
+    case editedReminderInCueWords
+}
+
 struct PracticeCoachingConcealmentPolicy: Equatable, Sendable {
     let state: PracticeCoachingConcealmentState
     let allowsEditing: Bool
+    let reason: PracticeCoachingConcealmentReason
+
+    init(
+        state: PracticeCoachingConcealmentState,
+        allowsEditing: Bool,
+        reason: PracticeCoachingConcealmentReason = .none
+    ) {
+        self.state = state
+        self.allowsEditing = allowsEditing
+        self.reason = reason
+    }
 
     var showsCueBody: Bool {
         state != .concealEntireCue
@@ -42,7 +60,7 @@ struct PracticeCoachingConcealmentPolicy: Equatable, Sendable {
         cue: CoachingSuggestion
     ) -> PracticeCoachingConcealmentPolicy {
         if practiceMode == .fullScript || isScriptRevealed {
-            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true)
+            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true, reason: .none)
         }
 
         let isIntentionalHandoff = isVerifiedIntentionalHandoff(
@@ -52,28 +70,40 @@ struct PracticeCoachingConcealmentPolicy: Equatable, Sendable {
 
         switch practiceMode {
         case .fullScript:
-            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true)
+            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true, reason: .none)
 
         case .memory:
             if isIntentionalHandoff {
-                return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: false)
+                return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: false, reason: .none)
             }
-            return PracticeCoachingConcealmentPolicy(state: .concealEntireCue, allowsEditing: false)
+            return PracticeCoachingConcealmentPolicy(
+                state: .concealEntireCue,
+                allowsEditing: false,
+                reason: .memoryMode
+            )
 
         case .cueWords:
             if cue.isUserEdited {
-                return PracticeCoachingConcealmentPolicy(state: .concealEntireCue, allowsEditing: false)
+                return PracticeCoachingConcealmentPolicy(
+                    state: .concealEntireCue,
+                    allowsEditing: false,
+                    reason: .editedReminderInCueWords
+                )
             }
             if let quoted = normalized(cue.exactPhrase) {
                 if isIntentionalHandoff {
-                    return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true)
+                    return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true, reason: .none)
                 }
                 if let markedExact = normalized(sectionExactPhrase), quoted == markedExact {
-                    return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true)
+                    return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true, reason: .none)
                 }
-                return PracticeCoachingConcealmentPolicy(state: .concealScriptPassage, allowsEditing: false)
+                return PracticeCoachingConcealmentPolicy(
+                    state: .concealScriptPassage,
+                    allowsEditing: false,
+                    reason: .cueWordsHiddenBodyPassage
+                )
             }
-            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true)
+            return PracticeCoachingConcealmentPolicy(state: .visible, allowsEditing: true, reason: .none)
         }
     }
 
@@ -101,11 +131,12 @@ struct PracticeCoachingConcealmentPolicy: Equatable, Sendable {
 
 struct PracticeCoachingConcealedCueView: View {
     let isActiveTake: Bool
+    var reason: PracticeCoachingConcealmentReason = .memoryMode
     let onRevealScript: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Coach Hidden for Recall", systemImage: "eye.slash")
+            Label(titleText, systemImage: "eye.slash")
                 .font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("practiceCoachConcealedTitle")
 
@@ -117,7 +148,7 @@ struct PracticeCoachingConcealedCueView: View {
             Button {
                 onRevealScript()
             } label: {
-                Label("Reveal Script & Coach", systemImage: "eye")
+                Label(revealButtonTitle, systemImage: "eye")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered)
@@ -134,7 +165,29 @@ struct PracticeCoachingConcealedCueView: View {
         .accessibilityIdentifier("practiceCoachConcealedView")
     }
 
-    private var explanationText: String {
+    var titleText: String {
+        if reason == .editedReminderInCueWords {
+            return "Edited Reminder Hidden (Cue Words)"
+        }
+        return "Coach Hidden for Recall"
+    }
+
+    var revealButtonTitle: String {
+        if reason == .editedReminderInCueWords {
+            return "Reveal Script & Edited Reminder"
+        }
+        return "Reveal Script & Coach"
+    }
+
+    var explanationText: String {
+        if reason == .editedReminderInCueWords {
+            if isActiveTake {
+                return "Your edited coaching reminder stays hidden in Cue Words mode while the script is concealed. " +
+                    "Reveal the script to view it (counts as one reveal for this take)."
+            }
+            return "Your edited coaching reminder needs a script reveal to view in Cue Words mode, " +
+                "keeping custom wording from giving away hidden lines."
+        }
         if isActiveTake {
             return "Pre-practice coaching is hidden while your script is concealed. " +
                 "Revealing also counts as a script reveal for this take."

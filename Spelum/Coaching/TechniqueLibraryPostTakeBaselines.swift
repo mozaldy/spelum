@@ -106,21 +106,7 @@ private extension TechniqueLibrary {
     }
 
     static func shouldAbstainForCleanTake(request: PostTakeCoachingRequest) -> Bool {
-        let observations = request.timingAnalysis?.observations ?? []
-        let hasGap = observations.contains { $0.kind == .phraseGap }
-        let estimatedWPM = request.timingAnalysis?.estimatedWordsPerMinute
-        let isFastPace = (estimatedWPM ?? 0) >= 165
-        let isSlowPace = (estimatedWPM ?? 120) <= 85 && estimatedWPM != nil
-        let hasAlignedPhrase = observations.contains {
-            $0.kind == .alignedExactPhrase || $0.kind == .alignedCuePhrase
-        }
-        return request.attemptStatus == .ready
-            && request.revealCount == 0
-            && request.markers.isEmpty
-            && !hasGap
-            && !isFastPace
-            && !isSlowPace
-            && hasAlignedPhrase
+        PostTakeCoachingOptionSet.isSupportedCleanTake(for: request)
     }
 
     // swiftlint:disable:next function_parameter_count
@@ -157,6 +143,7 @@ private extension TechniqueLibrary {
     }
 
     static func selectPrimaryObservation(for request: PostTakeCoachingRequest) -> TimingObservation? {
+        guard request.timingAnalysis?.outcome == .completed else { return nil }
         let observations = request.timingAnalysis?.observations ?? []
         if let gap = observations.first(where: { $0.kind == .phraseGap }) {
             return gap
@@ -173,7 +160,11 @@ private extension TechniqueLibrary {
     ) -> PhraseAnchor {
         if let matched = observation?.matchedPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
            !matched.isEmpty,
-           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(matched, in: request.scriptText) {
+           CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+               matched,
+               in: request.scriptText,
+               allowShortStandalone: observation?.kind == .alignedExactPhrase
+           ) {
             return PhraseAnchor(phrase: matched, fromHandoff: false)
         }
         return selectVerbatimPhrase(
@@ -191,20 +182,31 @@ private extension TechniqueLibrary {
     ) -> String {
         if let observation, observation.kind == .phraseGap, let gap = observation.gapDuration {
             let formatted = String(format: "%.1f", gap)
+            if PostTakeCoachingOptionSet.hasStageDirectionSilence(in: request) {
+                return "Replay around the estimated \(formatted)s silent beat to check whether the wait " +
+                    "feels intentional while the on-screen step settles."
+            }
             return "Replay around the estimated \(formatted)s gap and test whether holding " +
                 "or tightening that beat makes the next line land cleaner."
         }
-        if let wpm = request.timingAnalysis?.estimatedWordsPerMinute, wpm >= 165 {
+        if PostTakeCoachingOptionSet.isFastPace(for: request),
+           let wpm = PostTakeCoachingOptionSet.reliableEstimatedWPM(for: request) {
             let rounded = Int(wpm.rounded())
             return "Pace was estimated near \(rounded) WPM; replay the highlighted line " +
                 "and try adding one clear breath right before it."
+        }
+        if PostTakeCoachingOptionSet.isSlowPace(for: request),
+           let wpm = PostTakeCoachingOptionSet.reliableEstimatedWPM(for: request) {
+            let rounded = Int(wpm.rounded())
+            return "Pace was estimated near \(rounded) WPM; replay the highlighted passage " +
+                "and test carrying slightly steadier momentum into the key phrase."
         }
         if request.revealCount > 0 {
             let revealWord = request.revealCount == 1
                 ? "1 script reveal"
                 : "\(request.revealCount) script reveals"
-            return "You used \(revealWord) on this take; replay the highlighted line once, " +
-                "then retry focusing on that single anchor."
+            return "You used \(revealWord) during this take; if you want to test recall without glancing, " +
+                "replay the highlighted line once and try focusing on that single anchor."
         }
         if !request.markers.isEmpty {
             return "Jump to your manual marker in playback and try one clean retry focused on the line after it."
@@ -217,10 +219,30 @@ private extension TechniqueLibrary {
         observation: TimingObservation?
     ) -> String {
         if observation?.kind == .phraseGap {
-            if request.isSpeakerChangeHandoff || request.isMultiSpeakerTalk {
+            let hasMultiSpeaker = request.isSpeakerChangeHandoff
+                || request.isMultiSpeakerTalk
+                || (request.timingAnalysis?.ambiguousNotes.contains { $0.reason == .multiSpeakerBoundary } == true)
+            let hasDemoSilence = PostTakeCoachingOptionSet.hasStageDirectionSilence(in: request)
+            if hasDemoSilence && hasMultiSpeaker {
+                return "Grounded in the bounded estimated gap around a scripted demo pause " +
+                    "without attributing the pause to a speaker."
+            }
+            if hasDemoSilence {
+                return "Grounded in the bounded estimated gap around a scripted demo pause — " +
+                    "silence during a live step can be intentional."
+            }
+            if hasMultiSpeaker {
                 return "Grounded in the bounded estimated gap without attributing the pause to a speaker."
             }
             return "Grounded directly in the bounded estimated phrase gap from on-device speech timing."
+        }
+        if PostTakeCoachingOptionSet.isFastPace(for: request)
+            || PostTakeCoachingOptionSet.isSlowPace(for: request) {
+            return "Grounded in the estimated speaking pace from validated on-device word timing."
+        }
+        if request.revealCount > 0 {
+            return "Grounded in the recorded script reveal count as an optional recall check, " +
+                "not a performance judgment."
         }
         if observation != nil {
             return "Anchored to the aligned passage timestamp so you can hear the exact moment on replay."

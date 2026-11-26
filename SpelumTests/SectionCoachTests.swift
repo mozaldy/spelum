@@ -215,8 +215,41 @@ struct SectionCoachTests {
         #expect(result.observationID == validObsID)
         #expect(result.action.contains("0.9s"))
         #expect(!result.rationale.lowercased().contains("sam"))
+    }
 
-        let abstainOption = try #require(optionSet.abstentionOptions.first)
+    @Test("Clean-take abstention is rejected on gap takes and accepted on supported clean takes")
+    func cleanTakeAbstentionGatingWorks() async throws {
+        let gapRequest = CoachingTestFixtures.makeSamplePostTakeRequest(withObservation: true)
+        let gapOptionSet = PostTakeCoachingOptionSet.build(for: gapRequest)
+        #expect(gapOptionSet.abstentionOptions.isEmpty)
+        let unjustifiedCleanService = SectionCoachService(
+            modelProvider: StubCoachingModelProvider(
+                availabilityState: .available,
+                postTakeHandler: { _ in
+                    RawModelPostTakeSelection(
+                        shouldAbstain: true,
+                        abstentionReasonID: "abstain.post.clean-take",
+                        techniqueID: nil,
+                        passageID: nil,
+                        evidenceID: nil,
+                        actionID: nil
+                    )
+                }
+            )
+        )
+        let rejectedClean = await unjustifiedCleanService.generatePostTakeCue(
+            request: gapRequest,
+            mode: .onDeviceModel
+        )
+        #expect(rejectedClean.origin == .authoredFallback)
+
+        let dataset = try CoachingEvaluationDataset.loadBundled()
+        let cleanCase = try #require(dataset.postTakeCases.first { $0.id == "review-02" })
+        let cleanRequest = cleanCase.makeRequest()
+        let cleanOptionSet = PostTakeCoachingOptionSet.build(for: cleanRequest)
+        let abstainOption = try #require(
+            cleanOptionSet.abstentionOptions.first { $0.id == "abstain.post.clean-take" }
+        )
         let abstainService = SectionCoachService(
             modelProvider: StubCoachingModelProvider(
                 availabilityState: .available,
@@ -232,7 +265,7 @@ struct SectionCoachTests {
                 }
             )
         )
-        let abstainResult = await abstainService.generatePostTakeCue(request: request, mode: .onDeviceModel)
+        let abstainResult = await abstainService.generatePostTakeCue(request: cleanRequest, mode: .onDeviceModel)
         #expect(abstainResult.origin == .onDeviceModel)
         #expect(abstainResult.isAbstention)
         #expect(abstainResult.observationID == nil)

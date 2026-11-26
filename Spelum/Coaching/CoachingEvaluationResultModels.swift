@@ -119,7 +119,12 @@ nonisolated struct BlindedEvaluationEntry: Identifiable, Codable, Equatable, Has
     let title: String
     let sectionTitle: String
     let scriptText: String
+    let exactPhrase: String?
     let handoffCueText: String?
+    let isSpeakerChangeHandoff: Bool
+    let isMultiSpeakerTalk: Bool
+    let knownSpeakerNames: [String]
+    let postTakeEvidence: EvaluationPostTakeEvidence?
     let tags: [String]
     let expectsAbstention: Bool
     let contextSummary: String
@@ -132,6 +137,89 @@ nonisolated struct BlindedEvaluationEntry: Identifiable, Codable, Equatable, Has
     let modelFallbackSummary: String?
     var rating: BlindedCaseRating?
 
+    init(
+        id: String,
+        category: CoachingCategory,
+        title: String,
+        sectionTitle: String,
+        scriptText: String,
+        exactPhrase: String? = nil,
+        handoffCueText: String?,
+        isSpeakerChangeHandoff: Bool = false,
+        isMultiSpeakerTalk: Bool? = nil,
+        knownSpeakerNames: [String] = [],
+        postTakeEvidence: EvaluationPostTakeEvidence? = nil,
+        tags: [String],
+        expectsAbstention: Bool,
+        contextSummary: String,
+        optionASource: CoachingSourceMode,
+        optionBSource: CoachingSourceMode,
+        optionASuggestion: CoachingSuggestion,
+        optionBSuggestion: CoachingSuggestion,
+        modelLatencyMilliseconds: Double?,
+        modelFellBackToAuthored: Bool,
+        modelFallbackSummary: String?,
+        rating: BlindedCaseRating?
+    ) {
+        self.id = id
+        self.category = category
+        self.title = title
+        self.sectionTitle = sectionTitle
+        self.scriptText = scriptText
+        self.exactPhrase = exactPhrase
+        self.handoffCueText = handoffCueText
+        self.isSpeakerChangeHandoff = isSpeakerChangeHandoff
+        self.isMultiSpeakerTalk = isMultiSpeakerTalk ?? (isSpeakerChangeHandoff || knownSpeakerNames.count > 1)
+        self.knownSpeakerNames = knownSpeakerNames
+        self.postTakeEvidence = postTakeEvidence
+        self.tags = tags
+        self.expectsAbstention = expectsAbstention
+        self.contextSummary = contextSummary
+        self.optionASource = optionASource
+        self.optionBSource = optionBSource
+        self.optionASuggestion = optionASuggestion
+        self.optionBSuggestion = optionBSuggestion
+        self.modelLatencyMilliseconds = modelLatencyMilliseconds
+        self.modelFellBackToAuthored = modelFellBackToAuthored
+        self.modelFallbackSummary = modelFallbackSummary
+        self.rating = rating
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, category, title, sectionTitle, scriptText, exactPhrase, handoffCueText
+        case isSpeakerChangeHandoff, isMultiSpeakerTalk, knownSpeakerNames, postTakeEvidence
+        case tags, expectsAbstention, contextSummary
+        case optionASource, optionBSource, optionASuggestion, optionBSuggestion
+        case modelLatencyMilliseconds, modelFellBackToAuthored, modelFallbackSummary, rating
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        category = try container.decode(CoachingCategory.self, forKey: .category)
+        title = try container.decode(String.self, forKey: .title)
+        sectionTitle = try container.decode(String.self, forKey: .sectionTitle)
+        scriptText = try container.decode(String.self, forKey: .scriptText)
+        exactPhrase = try container.decodeIfPresent(String.self, forKey: .exactPhrase)
+        handoffCueText = try container.decodeIfPresent(String.self, forKey: .handoffCueText)
+        isSpeakerChangeHandoff = try container.decodeIfPresent(Bool.self, forKey: .isSpeakerChangeHandoff) ?? false
+        knownSpeakerNames = try container.decodeIfPresent([String].self, forKey: .knownSpeakerNames) ?? []
+        isMultiSpeakerTalk = try container.decodeIfPresent(Bool.self, forKey: .isMultiSpeakerTalk)
+            ?? (isSpeakerChangeHandoff || knownSpeakerNames.count > 1)
+        postTakeEvidence = try container.decodeIfPresent(EvaluationPostTakeEvidence.self, forKey: .postTakeEvidence)
+        tags = try container.decode([String].self, forKey: .tags)
+        expectsAbstention = try container.decode(Bool.self, forKey: .expectsAbstention)
+        contextSummary = try container.decode(String.self, forKey: .contextSummary)
+        optionASource = try container.decode(CoachingSourceMode.self, forKey: .optionASource)
+        optionBSource = try container.decode(CoachingSourceMode.self, forKey: .optionBSource)
+        optionASuggestion = try container.decode(CoachingSuggestion.self, forKey: .optionASuggestion)
+        optionBSuggestion = try container.decode(CoachingSuggestion.self, forKey: .optionBSuggestion)
+        modelLatencyMilliseconds = try container.decodeIfPresent(Double.self, forKey: .modelLatencyMilliseconds)
+        modelFellBackToAuthored = try container.decode(Bool.self, forKey: .modelFellBackToAuthored)
+        modelFallbackSummary = try container.decodeIfPresent(String.self, forKey: .modelFallbackSummary)
+        rating = try container.decodeIfPresent(BlindedCaseRating.self, forKey: .rating)
+    }
+
     var isRated: Bool { rating != nil }
 
     var modelSuggestion: CoachingSuggestion {
@@ -140,6 +228,23 @@ nonisolated struct BlindedEvaluationEntry: Identifiable, Codable, Equatable, Has
 
     var isModelFallback: Bool {
         modelFellBackToAuthored || modelSuggestion.origin == .authoredFallback
+    }
+
+    var speakerContextSummary: String? {
+        let names = knownSpeakerNames
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let namesText = names.isEmpty ? nil : "Known speakers: \(names.joined(separator: ", "))"
+        if isSpeakerChangeHandoff {
+            return namesText.map { "Speaker-change handoff · \($0)" } ?? "Speaker-change handoff"
+        }
+        if isMultiSpeakerTalk {
+            return namesText.map { "Multi-speaker talk · \($0)" } ?? "Multi-speaker talk"
+        }
+        if let handoff = handoffCueText?.trimmingCharacters(in: .whitespacesAndNewlines), !handoff.isEmpty {
+            return namesText.map { "Solo section transition · \($0)" } ?? "Solo section transition"
+        }
+        return names.count > 1 ? namesText : nil
     }
 
     func displayTitle(at index: Int, isUnblinded: Bool) -> String {

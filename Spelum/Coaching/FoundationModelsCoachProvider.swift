@@ -77,7 +77,7 @@ nonisolated struct AppleFoundationModelsCoachProvider: CoachingModelProviding {
             model: SystemLanguageModel.default,
             instructions: Self.preparationInstructions
         )
-        let prompt = Self.buildPreparationPrompt(for: request, optionSet: optionSet)
+        let prompt = CoachingPromptBuilder.buildPreparationPrompt(for: request, optionSet: optionSet)
         let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 256)
         let response = try await session.respond(
             to: prompt,
@@ -100,7 +100,7 @@ nonisolated struct AppleFoundationModelsCoachProvider: CoachingModelProviding {
             model: SystemLanguageModel.default,
             instructions: Self.postTakeInstructions
         )
-        let prompt = Self.buildPostTakePrompt(for: request, optionSet: optionSet)
+        let prompt = CoachingPromptBuilder.buildPostTakePrompt(for: request, optionSet: optionSet)
         let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 256)
         let response = try await session.respond(
             to: prompt,
@@ -125,10 +125,10 @@ private extension AppleFoundationModelsCoachProvider {
     Select the best pre-practice option IDs from the supplied bounded menus.
     Rules:
     - Copy IDs verbatim from the provided lists. Never invent new IDs or rewrite passages.
-    - If shouldAbstain is true, provide only an allowed abstentionReasonID
-      and leave techniqueID, passageID, and actionID empty.
-    - If shouldAbstain is false, leave abstentionReasonID empty and pick one
-      techniqueID, one passageID, and one compatible actionID.
+    - Only set shouldAbstain = true when an ID appears in Allowed Abstention Options;
+      leave techniqueID, passageID, and actionID empty when abstaining.
+    - When shouldAbstain is false, leave abstentionReasonID empty and pick one actionID
+      whose technique= and passages=[...] explicitly include your chosen techniqueID and passageID.
     - Prefer the marked exact phrase or handoff passage when it fits the technique best.
     """
 
@@ -137,11 +137,12 @@ private extension AppleFoundationModelsCoachProvider {
     Select the best post-take option IDs from the supplied bounded menus.
     Rules:
     - Copy IDs verbatim from the provided lists. Never invent new IDs.
-    - When abstention is required or the take finished cleanly with no clear adjustment needed,
-      set shouldAbstain = true, pick an allowed abstentionReasonID, and leave
-      techniqueID, passageID, evidenceID, and actionID empty.
-    - When shouldAbstain is false, leave abstentionReasonID empty and choose one
-      evidenceID, one compatible passageID, one compatible techniqueID, and one compatible actionID.
+    - Only set shouldAbstain = true when an ID appears in Allowed Abstention Options;
+      leave techniqueID, passageID, evidenceID, and actionID empty when abstaining.
+    - When shouldAbstain is false, leave abstentionReasonID empty and choose one evidenceID,
+      one passageID in that evidence's passages=[...], one techniqueID in both the evidence's
+      and action's techniques=[...], and one actionID whose evidence=[...] includes evidenceID.
+    - Never treat scripted demo pauses or script reveals as proof of poor performance.
     """
 
     static func supportsEnglishLocale(model: SystemLanguageModel) -> Bool {
@@ -156,88 +157,5 @@ private extension AppleFoundationModelsCoachProvider {
     static func optionalID(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    static func buildPreparationPrompt(
-        for request: PreparationCoachingRequest,
-        optionSet: PreparationCoachingOptionSet
-    ) -> String {
-        var lines: [String] = [
-            "Task: Pre-practice bounded selection (\(request.promptVersion))",
-            "Section title: \(request.sectionTitle)",
-            "Section purpose: \(request.purpose.displayName)",
-            "Speaker change handoff: \(request.isSpeakerChangeHandoff ? "yes" : "no")",
-            "Abstention required: \(optionSet.mustAbstain ? "yes" : "no")"
-        ]
-        if !request.cueWords.isEmpty {
-            lines.append("Cue words: \(request.cueWords.joined(separator: ", "))")
-        }
-        lines.append("Script context:\n\(request.scriptText)")
-        appendAbstentionOptions(optionSet.abstentionOptions, to: &lines)
-        lines.append("Allowed Candidate Techniques:")
-        for technique in optionSet.candidateTechniques {
-            lines.append("- \(technique.id) | \(technique.title) | handoff=\(technique.appliesToHandoff ? "yes" : "no")")
-        }
-        lines.append("Allowed Verbatim Passages:")
-        for passage in optionSet.passageOptions {
-            lines.append("- \(passage.id) | role=\(passage.role.rawValue) | \"\(passage.phrase)\"")
-        }
-        lines.append("Allowed Action Options:")
-        for action in optionSet.actionOptions {
-            lines.append("- \(action.id) | technique=\(action.techniqueID) | \(action.summaryForModel)")
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    static func buildPostTakePrompt(
-        for request: PostTakeCoachingRequest,
-        optionSet: PostTakeCoachingOptionSet
-    ) -> String {
-        var lines: [String] = [
-            "Task: Post-take bounded selection (\(request.promptVersion))",
-            "Section title: \(request.sectionTitle)",
-            "Section purpose: \(request.purpose.displayName)",
-            "Attempt status: \(request.attemptStatus.displayName)",
-            "Practice mode: \(request.practiceMode.displayName)",
-            "Recorded reveals: \(request.revealCount)",
-            "Recorded markers: \(request.markers.count)",
-            "Abstention required: \(optionSet.mustAbstain ? "yes" : "no")"
-        ]
-        appendAbstentionOptions(optionSet.abstentionOptions, to: &lines)
-        if !optionSet.mustAbstain {
-            lines.append("Allowed Evidence Options:")
-            for item in optionSet.evidenceOptions {
-                let passages = item.compatiblePassageIDs.sorted().joined(separator: ",")
-                lines.append("- \(item.id) | \(item.summaryForModel) | passages=[\(passages)]")
-            }
-            lines.append("Allowed Verbatim Passages:")
-            for passage in optionSet.passageOptions {
-                lines.append("- \(passage.id) | role=\(passage.role.rawValue) | \"\(passage.phrase)\"")
-            }
-            lines.append("Allowed Candidate Techniques:")
-            for technique in optionSet.candidateTechniques {
-                lines.append("- \(technique.id) | \(technique.title) | \(technique.postTakeFocus)")
-            }
-            lines.append("Allowed Action Options:")
-            for action in optionSet.actionOptions {
-                let evList = action.compatibleEvidenceIDs.sorted().joined(separator: ",")
-                lines.append("- \(action.id) | evidence=[\(evList)] | \(action.summaryForModel)")
-            }
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    static func appendAbstentionOptions(
-        _ options: [CoachingAbstentionOption],
-        to lines: inout [String]
-    ) {
-        if options.isEmpty {
-            lines.append("Allowed Abstention Options: none")
-            return
-        }
-        lines.append("Allowed Abstention Options:")
-        for option in options {
-            lines.append("- \(option.id) | \(option.summaryForModel)")
-        }
     }
 }

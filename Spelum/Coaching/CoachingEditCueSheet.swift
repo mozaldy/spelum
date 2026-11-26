@@ -6,6 +6,7 @@ struct CoachingEditCueSheet: View {
     let title: String
     let originalAction: String
     let initialText: String
+    let footerNotice: String?
     let onSave: (String) -> Void
 
     @State private var draftText: String
@@ -14,11 +15,13 @@ struct CoachingEditCueSheet: View {
         title: String,
         originalAction: String,
         initialText: String,
+        footerNotice: String? = nil,
         onSave: @escaping (String) -> Void
     ) {
         self.title = title
         self.originalAction = originalAction
         self.initialText = initialText
+        self.footerNotice = footerNotice
         self.onSave = onSave
         self._draftText = State(initialValue: initialText)
     }
@@ -38,10 +41,17 @@ struct CoachingEditCueSheet: View {
                 } header: {
                     Text("Delivery Experiment")
                 } footer: {
-                    Text(
-                        "Editing this cue updates only your coaching note. " +
-                        "Your original script and take evidence stay unchanged."
-                    )
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(
+                            "Editing this cue updates only your coaching note. " +
+                            "Your original script and take evidence stay unchanged."
+                        )
+                        if let footerNotice, !footerNotice.isEmpty {
+                            Label(footerNotice, systemImage: "eye.slash")
+                                .foregroundStyle(.orange)
+                                .accessibilityIdentifier("coachingEditCueRevealNotice")
+                        }
+                    }
                 }
 
                 if trimmedDraft != originalAction {

@@ -170,18 +170,7 @@ struct CoachingEvaluationView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
-
-        if session.isLegacySession {
-            Label(
-                "Legacy evaluation session (\(session.promptVersion)). Re-run on v2 for a valid qualification check.",
-                systemImage: "clock.arrow.circlepath"
-            )
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("evaluationLegacySessionBanner")
-        }
-
+        sessionStatusBanner(session: session, stats: stats)
         if !session.isUnblinded {
             Button {
                 if stats.ratedCases < stats.totalCases {
@@ -260,6 +249,34 @@ struct CoachingEvaluationView: View {
 }
 
 private extension CoachingEvaluationView {
+    @ViewBuilder
+    func sessionStatusBanner(
+        session: CoachingEvaluationSession,
+        stats: CoachingTaskEvaluationSummary
+    ) -> some View {
+        if session.isLegacySession {
+            Label(
+                "Legacy evaluation session (\(session.promptVersion)). " +
+                "Re-run on v\(CoachingEvaluationSession.currentSchemaVersion) for a valid qualification check.",
+                systemImage: "clock.arrow.circlepath"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("evaluationLegacySessionBanner")
+        } else if !stats.hasCompleteRatingEvidence {
+            Label(
+                "Take evidence is unavailable in \(stats.missingPostTakeEvidenceCount) saved case(s). " +
+                "Re-run on v\(CoachingEvaluationSession.currentSchemaVersion) before scoring for qualification.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("evaluationMissingEvidenceSessionBanner")
+        }
+    }
+
     func loadInitialState() {
         errorMessage = nil
         do {

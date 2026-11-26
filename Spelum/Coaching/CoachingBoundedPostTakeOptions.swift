@@ -97,38 +97,93 @@ nonisolated struct PostTakeCoachingOptionSet: Equatable, Sendable {
     }
 
     static func hasBlockingAmbiguity(in request: PostTakeCoachingRequest) -> Bool {
+        !blockingAmbiguityReasons(in: request).isEmpty
+    }
+
+    static func blockingAmbiguityReasons(in request: PostTakeCoachingRequest) -> [AmbiguousEvidenceReason] {
         let notes = request.timingAnalysis?.ambiguousNotes ?? []
-        return notes.contains { note in
-            switch note.reason {
-            case .emptyTranscript, .overlappingRanges, .incompleteTimingCoverage,
-                 .repeatedPhrase, .paraphrasedOrMissingWords:
-                true
-            case .stageDirectionSilence, .multiSpeakerBoundary:
-                false
-            }
+        var seen: Set<AmbiguousEvidenceReason> = []
+        var ordered: [AmbiguousEvidenceReason] = []
+        for note in notes where note.reason.isBlockingTimingAmbiguity && seen.insert(note.reason).inserted {
+            ordered.append(note.reason)
         }
+        return ordered
+    }
+
+    static func hasStageDirectionSilence(in request: PostTakeCoachingRequest) -> Bool {
+        (request.timingAnalysis?.ambiguousNotes ?? []).contains { $0.reason == .stageDirectionSilence }
+    }
+
+    static func reliableEstimatedWPM(for request: PostTakeCoachingRequest) -> Double? {
+        guard request.timingAnalysis?.outcome == .completed,
+              !hasBlockingAmbiguity(in: request),
+              let observations = request.timingAnalysis?.observations,
+              !observations.isEmpty,
+              let wpm = request.timingAnalysis?.estimatedWordsPerMinute,
+              wpm.isFinite,
+              wpm > 0 else {
+            return nil
+        }
+        return wpm
+    }
+
+    static func isFastPace(for request: PostTakeCoachingRequest) -> Bool {
+        guard let wpm = reliableEstimatedWPM(for: request) else { return false }
+        return wpm >= 165
+    }
+
+    static func isSlowPace(for request: PostTakeCoachingRequest) -> Bool {
+        guard !hasStageDirectionSilence(in: request),
+              let wpm = reliableEstimatedWPM(for: request) else {
+            return false
+        }
+        return wpm <= 85
+    }
+
+    static func isSupportedCleanTake(for request: PostTakeCoachingRequest) -> Bool {
+        guard request.attemptStatus == .ready,
+              request.playableDuration > 0,
+              request.revealCount == 0,
+              request.markers.isEmpty,
+              request.timingAnalysis?.outcome == .completed,
+              !hasBlockingAmbiguity(in: request),
+              !isFastPace(for: request),
+              !isSlowPace(for: request) else {
+            return false
+        }
+        let observations = request.timingAnalysis?.observations ?? []
+        let hasGap = observations.contains { $0.kind == .phraseGap }
+        let hasAlignedPhrase = observations.contains {
+            $0.kind == .alignedExactPhrase || $0.kind == .alignedCuePhrase
+        }
+        return !hasGap && hasAlignedPhrase
     }
 
     static func mandatoryAbstentionOption(for request: PostTakeCoachingRequest) -> CoachingAbstentionOption? {
         if request.attemptStatus == .silentCompleted || request.playableDuration <= 0 {
+            let revealNote = request.revealCount == 0
+                ? "Silent recall captures time and script reveals only, without audio timing evidence."
+                : "Silent recall recorded \(revealPhrase(request.revealCount)) without audio, " +
+                    "so no audio timing cue is offered."
             return CoachingAbstentionOption(
                 id: "abstain.post.silent-recall",
                 summaryForModel: "Silent recall has no audio or timing observations.",
                 renderedAction:
-                    "No timing cue offered for silent recall. Record an audio take when ready to review delivery.",
-                renderedRationale:
-                    "Silent recall captures time and script reveals only, without audio timing evidence."
+                    "No audio timing cue offered for silent recall. " +
+                    "Record an audio take when ready to review delivery.",
+                renderedRationale: revealNote
             )
         }
         let observations = request.timingAnalysis?.observations ?? []
         if request.attemptStatus == .interrupted && observations.isEmpty {
+            let duration = String(format: "%.1fs", request.playableDuration)
             return CoachingAbstentionOption(
                 id: "abstain.post.interrupted-partial",
-                summaryForModel: "Interrupted partial take with no validated timing observations.",
+                summaryForModel: "Interrupted partial take (\(duration)) with no validated timing observations.",
                 renderedAction:
                     "Replay your partial audio or retry the section before picking a delivery adjustment.",
                 renderedRationale:
-                    "This take was interrupted before full timing evidence was available."
+                    "This take was interrupted after \(duration) before full timing evidence was available."
             )
         }
         if request.timingAnalysis?.outcome == .declined {
@@ -136,19 +191,25 @@ nonisolated struct PostTakeCoachingOptionSet: Equatable, Sendable {
                 id: "abstain.post.analysis-declined",
                 summaryForModel: "On-device speech timing analysis was declined for this take.",
                 renderedAction:
-                    "Withholding an automated timing cue — replay the take and add a manual marker to adjust.",
+                    "Withholding an automated timing cue — replay the take and add a manual marker " +
+                    "if you want to adjust.",
                 renderedRationale:
-                    "Speech timing analysis was skipped for this take, so playback and marking are more reliable."
+                    "Speech timing analysis was skipped for this take, " +
+                    "so listening back and marking directly is more reliable."
             )
         }
-        if observations.isEmpty && hasBlockingAmbiguity(in: request) {
+        if observations.isEmpty && hasBlockingAmbiguity(in: request)
+            && request.revealCount == 0 && request.markers.isEmpty {
+            let reasonSummary = formattedBlockingReasons(for: request)
             return CoachingAbstentionOption(
                 id: "abstain.post.uncertain-alignment",
-                summaryForModel: "Transcript was empty, paraphrased, repeated, or had overlapping/incomplete ranges.",
+                summaryForModel: "Speech timing unavailable due to \(reasonSummary).",
                 renderedAction:
-                    "Withholding an automated timing cue — replay the take and add a manual marker to adjust.",
+                    "Withholding an automated timing cue — replay the take and add a manual marker " +
+                    "to test an adjustment.",
                 renderedRationale:
-                    "Speech alignment was uncertain, silent, or incomplete, so playback and marking are more reliable."
+                    "Speech timing was withheld because of \(reasonSummary), " +
+                    "so listening back and marking directly is more reliable."
             )
         }
         return nil
@@ -156,244 +217,100 @@ nonisolated struct PostTakeCoachingOptionSet: Equatable, Sendable {
 }
 
 private extension PostTakeCoachingOptionSet {
+    static func revealPhrase(_ count: Int) -> String {
+        count == 1 ? "1 script reveal" : "\(count) script reveals"
+    }
+
+    static func formattedBlockingReasons(for request: PostTakeCoachingRequest) -> String {
+        let reasons = blockingAmbiguityReasons(in: request)
+        guard !reasons.isEmpty else { return "uncertain speech timing" }
+        return reasons.map { $0.neutralDisplayLabel.lowercased() }.joined(separator: " and ")
+    }
+
     static func buildOptionalAbstentionOptions(
         for request: PostTakeCoachingRequest,
         hasEvidence: Bool
     ) -> [CoachingAbstentionOption] {
         if !hasEvidence {
-            return [
-                CoachingAbstentionOption(
-                    id: "abstain.post.no-timing-evidence",
-                    summaryForModel: "No validated timing observations, reveals, or markers to anchor a suggestion.",
-                    renderedAction:
-                        "Withholding an automated timing cue — replay the take and add a manual marker to adjust.",
-                    renderedRationale:
-                        "No validated timing observations or recorded rehearsal flags were present on this take."
-                )
-            ]
+            return [noTimingEvidenceAbstention()]
         }
-        return [
-            CoachingAbstentionOption(
-                id: "abstain.post.clean-take",
-                summaryForModel: "Take finished cleanly with aligned phrasing and no change needed right now.",
-                renderedAction:
-                    "No change needed right now — replay the aligned passage once to confirm it sounds right.",
-                renderedRationale:
-                    "This take finished cleanly with \(request.revealCount) reveals and aligned phrasing, " +
-                    "so withholding a correction fits."
-            )
-        ]
+        if isSupportedCleanTake(for: request) {
+            return [cleanTakeAbstention()]
+        }
+        if request.attemptStatus == .interrupted {
+            return [interruptedPartialAbstention(duration: request.playableDuration)]
+        }
+        if hasBlockingAmbiguity(in: request) {
+            return [uncertainTimingAbstention(reasonSummary: formattedBlockingReasons(for: request))]
+        }
+        if hasStageDirectionSilence(in: request)
+            && request.revealCount == 0
+            && request.markers.isEmpty
+            && !isFastPace(for: request) {
+            return [demoSilenceAbstention()]
+        }
+        return []
     }
 
-    static func buildEvidenceOptions(
-        for request: PostTakeCoachingRequest,
-        observations: [TimingObservation],
-        passages: [CoachingPassageOption]
-    ) -> [CoachingEvidenceOption] {
-        let scriptPassageIDs = Set(passages.filter { !$0.fromHandoff }.map(\.id))
-        let allTechIDs = Set(request.candidateTechniques.map(\.id))
-        guard !scriptPassageIDs.isEmpty, !allTechIDs.isEmpty else { return [] }
-
-        var options: [CoachingEvidenceOption] = []
-        let primaryAligned = observations.first {
-            $0.kind == .alignedExactPhrase || $0.kind == .alignedCuePhrase || $0.kind == .alignedScriptPhrase
-        }
-
-        for obs in observations {
-            if let option = makeObservationEvidence(obs: obs, passages: passages, allTechIDs: allTechIDs) {
-                options.append(option)
-            }
-        }
-
-        appendPaceEvidence(
-            for: request,
-            observations: observations,
-            primaryAligned: primaryAligned,
-            passages: passages,
-            scriptPassageIDs: scriptPassageIDs,
-            allTechIDs: allTechIDs,
-            to: &options
+    static func noTimingEvidenceAbstention() -> CoachingAbstentionOption {
+        CoachingAbstentionOption(
+            id: "abstain.post.no-timing-evidence",
+            summaryForModel: "No validated timing observations, reveals, or markers to anchor a suggestion.",
+            renderedAction:
+                "Withholding an automated timing cue — replay the take and add a manual marker to adjust.",
+            renderedRationale:
+                "No validated timing observations or recorded rehearsal markers were present on this take."
         )
-        appendFactEvidence(
-            for: request,
-            primaryAligned: primaryAligned,
-            scriptPassageIDs: scriptPassageIDs,
-            allTechIDs: allTechIDs,
-            to: &options
+    }
+
+    static func cleanTakeAbstention() -> CoachingAbstentionOption {
+        CoachingAbstentionOption(
+            id: "abstain.post.clean-take",
+            summaryForModel:
+                "Take finished cleanly with 0 reveals, 0 markers, steady pace, and aligned phrasing.",
+            renderedAction:
+                "No change needed right now — replay the aligned passage once to confirm it sounds right.",
+            renderedRationale:
+                "This take finished cleanly with 0 reveals, no manual markers, and aligned phrasing, " +
+                "so withholding a correction fits."
         )
-        return options
     }
 
-    static func makeObservationEvidence(
-        obs: TimingObservation,
-        passages: [CoachingPassageOption],
-        allTechIDs: Set<String>
-    ) -> CoachingEvidenceOption? {
-        let matchedPassages = semanticallyMatchingPassageIDs(for: obs, in: passages)
-        guard !matchedPassages.isEmpty else { return nil }
-
-        let obsKey = "obs.\(obs.id.uuidString.lowercased())"
-        switch obs.kind {
-        case .phraseGap:
-            guard let gap = obs.gapDuration else { return nil }
-            let formatted = String(format: "%.1f", gap)
-            return CoachingEvidenceOption(
-                id: obsKey,
-                kind: .phraseGap(
-                    observationID: obs.id,
-                    gapSeconds: gap,
-                    startTime: obs.startTime,
-                    endTime: obs.endTime
-                ),
-                observationID: obs.id,
-                summaryForModel:
-                    "Estimated \(formatted)s phrase gap (\(String(format: "%.1f", obs.startTime))s-" +
-                    "\(String(format: "%.1f", obs.endTime))s)",
-                compatiblePassageIDs: matchedPassages,
-                compatibleTechniqueIDs: allTechIDs
-            )
-        case .alignedExactPhrase, .alignedCuePhrase, .alignedScriptPhrase:
-            let clock = RehearsalTimeFormatter.clockString(for: obs.startTime)
-            return CoachingEvidenceOption(
-                id: obsKey,
-                kind: .alignedPhrase(
-                    observationID: obs.id,
-                    kind: obs.kind,
-                    startTime: obs.startTime,
-                    endTime: obs.endTime
-                ),
-                observationID: obs.id,
-                summaryForModel: "Aligned passage at \(clock) (\(obs.kind.rawValue))",
-                compatiblePassageIDs: matchedPassages,
-                compatibleTechniqueIDs: allTechIDs
-            )
-        }
+    static func interruptedPartialAbstention(duration: TimeInterval) -> CoachingAbstentionOption {
+        let formatted = String(format: "%.1fs", duration)
+        return CoachingAbstentionOption(
+            id: "abstain.post.interrupted-partial",
+            summaryForModel: "Take was interrupted after \(formatted); withholding an adjustment is reasonable.",
+            renderedAction:
+                "Replay your partial audio or retry the full section before picking a delivery adjustment.",
+            renderedRationale:
+                "This take was interrupted after \(formatted), so withholding a cue until a full pass fits."
+        )
     }
 
-    // swiftlint:disable:next function_parameter_count
-    static func appendPaceEvidence(
-        for request: PostTakeCoachingRequest,
-        observations: [TimingObservation],
-        primaryAligned: TimingObservation?,
-        passages: [CoachingPassageOption],
-        scriptPassageIDs: Set<String>,
-        allTechIDs: Set<String>,
-        to options: inout [CoachingEvidenceOption]
-    ) {
-        guard request.timingAnalysis?.outcome == .completed,
-              !hasBlockingAmbiguity(in: request),
-              !observations.isEmpty,
-              let wpm = request.timingAnalysis?.estimatedWordsPerMinute else {
-            return
-        }
-        let rounded = Int(wpm.rounded())
-        let alignedIDs = primaryAligned.map { semanticallyMatchingPassageIDs(for: $0, in: passages) } ?? []
-        let compatiblePassages = alignedIDs.isEmpty ? scriptPassageIDs : alignedIDs
-
-        if wpm >= 165 {
-            options.append(
-                CoachingEvidenceOption(
-                    id: "fact.pace.fast",
-                    kind: .fastPace(estimatedWPM: rounded, anchorObservationID: primaryAligned?.id),
-                    observationID: primaryAligned?.id,
-                    summaryForModel: "Estimated fast speaking pace near \(rounded) WPM",
-                    compatiblePassageIDs: compatiblePassages,
-                    compatibleTechniqueIDs: allTechIDs
-                )
-            )
-        } else if wpm <= 85 {
-            options.append(
-                CoachingEvidenceOption(
-                    id: "fact.pace.slow",
-                    kind: .slowPace(estimatedWPM: rounded, anchorObservationID: primaryAligned?.id),
-                    observationID: primaryAligned?.id,
-                    summaryForModel: "Estimated slow speaking pace near \(rounded) WPM",
-                    compatiblePassageIDs: compatiblePassages,
-                    compatibleTechniqueIDs: allTechIDs
-                )
-            )
-        }
+    static func uncertainTimingAbstention(reasonSummary: String) -> CoachingAbstentionOption {
+        CoachingAbstentionOption(
+            id: "abstain.post.uncertain-timing",
+            summaryForModel: "Timing had \(reasonSummary); withholding automated advice fits.",
+            renderedAction:
+                "Withholding an automated cue — replay the take and decide by ear " +
+                "whether anything needs adjustment.",
+            renderedRationale:
+                "Speech timing noted \(reasonSummary), so reviewing playback directly fits this take."
+        )
     }
 
-    static func appendFactEvidence(
-        for request: PostTakeCoachingRequest,
-        primaryAligned: TimingObservation?,
-        scriptPassageIDs: Set<String>,
-        allTechIDs: Set<String>,
-        to options: inout [CoachingEvidenceOption]
-    ) {
-        if request.revealCount > 0 {
-            options.append(
-                CoachingEvidenceOption(
-                    id: "fact.reveals",
-                    kind: .scriptReveals(count: request.revealCount, anchorObservationID: primaryAligned?.id),
-                    observationID: primaryAligned?.id,
-                    summaryForModel: "Recorded \(request.revealCount) script reveal(s) during take",
-                    compatiblePassageIDs: scriptPassageIDs,
-                    compatibleTechniqueIDs: allTechIDs
-                )
-            )
-        }
-        for (idx, marker) in request.markers.prefix(3).enumerated() {
-            let clock = RehearsalTimeFormatter.clockString(for: marker.timestamp)
-            options.append(
-                CoachingEvidenceOption(
-                    id: "fact.marker.\(idx)",
-                    kind: .manualMarker(
-                        timestamp: marker.timestamp,
-                        label: marker.label,
-                        anchorObservationID: primaryAligned?.id
-                    ),
-                    observationID: primaryAligned?.id,
-                    summaryForModel: "Manual marker at \(clock) (\(marker.label))",
-                    compatiblePassageIDs: scriptPassageIDs,
-                    compatibleTechniqueIDs: allTechIDs
-                )
-            )
-        }
-    }
-
-    static func semanticallyMatchingPassageIDs(
-        for observation: TimingObservation,
-        in passages: [CoachingPassageOption]
-    ) -> Set<String> {
-        let scriptPassages = passages.filter { !$0.fromHandoff }
-        let contextSnippets: [String]
-        switch observation.kind {
-        case .phraseGap:
-            contextSnippets = [observation.followingContext, observation.precedingContext]
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        case .alignedExactPhrase, .alignedCuePhrase, .alignedScriptPhrase:
-            contextSnippets = [observation.matchedPhrase]
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-        guard !contextSnippets.isEmpty else { return [] }
-
-        var matched: Set<String> = []
-        for passage in scriptPassages {
-            let passageWords = CoachingPassageExtractor.normalizedWords(in: passage.phrase)
-            guard !passageWords.isEmpty else { continue }
-            for snippet in contextSnippets {
-                let snippetWords = CoachingPassageExtractor.normalizedWords(in: snippet)
-                guard !snippetWords.isEmpty else { continue }
-                if containsContiguousSubsequence(snippetWords, in: passageWords)
-                    || containsContiguousSubsequence(passageWords, in: snippetWords) {
-                    matched.insert(passage.id)
-                    break
-                }
-            }
-        }
-        return matched
-    }
-
-    static func containsContiguousSubsequence(_ needle: [String], in haystack: [String]) -> Bool {
-        guard !needle.isEmpty, needle.count <= haystack.count else { return false }
-        let limit = haystack.count - needle.count
-        for start in 0...limit where Array(haystack[start..<(start + needle.count)]) == needle {
-            return true
-        }
-        return false
+    static func demoSilenceAbstention() -> CoachingAbstentionOption {
+        CoachingAbstentionOption(
+            id: "abstain.post.demo-silence-ok",
+            summaryForModel:
+                "Scripted stage-direction demo pause may already feel intentional; no change required.",
+            renderedAction:
+                "No change needed right now — replay the silent demo beat once " +
+                "to confirm the wait feels intentional.",
+            renderedRationale:
+                "This section includes a scripted stage-direction pause, " +
+                "so a silent beat during the demo is expected."
+        )
     }
 }

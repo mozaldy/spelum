@@ -195,7 +195,7 @@ final class StubCoachingModelProvider: CoachingModelProviding, @unchecked Sendab
         for request: PostTakeCoachingRequest
     ) -> RawModelPostTakeSelection {
         let optionSet = PostTakeCoachingOptionSet.build(for: request)
-        if let abstention = optionSet.abstentionOptions.first {
+        if optionSet.mustAbstain, let abstention = optionSet.abstentionOptions.first {
             return RawModelPostTakeSelection(
                 shouldAbstain: true,
                 abstentionReasonID: abstention.id,
@@ -205,9 +205,40 @@ final class StubCoachingModelProvider: CoachingModelProviding, @unchecked Sendab
                 actionID: nil
             )
         }
+        if PostTakeCoachingOptionSet.isSupportedCleanTake(for: request),
+           let cleanTake = optionSet.abstentionOptions.first(where: { $0.id == "abstain.post.clean-take" }) {
+            return RawModelPostTakeSelection(
+                shouldAbstain: true,
+                abstentionReasonID: cleanTake.id,
+                techniqueID: nil,
+                passageID: nil,
+                evidenceID: nil,
+                actionID: nil
+            )
+        }
+        for evidence in optionSet.evidenceOptions {
+            for action in optionSet.actionOptions where action.compatibleEvidenceIDs.contains(evidence.id) {
+                if let techID = optionSet.candidateTechniques.first(where: {
+                    action.compatibleTechniqueIDs.contains($0.id)
+                })?.id {
+                    let passageID = optionSet.passageOptions.first(where: {
+                        evidence.compatiblePassageIDs.contains($0.id)
+                    })?.id
+                    return RawModelPostTakeSelection(
+                        shouldAbstain: false,
+                        abstentionReasonID: nil,
+                        techniqueID: techID,
+                        passageID: passageID,
+                        evidenceID: evidence.id,
+                        actionID: action.id
+                    )
+                }
+            }
+        }
+        let fallbackAbstention = optionSet.abstentionOptions.first?.id ?? "abstain.post.insufficient-evidence"
         return RawModelPostTakeSelection(
             shouldAbstain: true,
-            abstentionReasonID: "abstain.post.clean-take",
+            abstentionReasonID: fallbackAbstention,
             techniqueID: nil,
             passageID: nil,
             evidenceID: nil,

@@ -25,6 +25,15 @@ extension PostTakeCoachingOptionSet {
             let hasMultiSpeaker = request.isSpeakerChangeHandoff
                 || request.isMultiSpeakerTalk
                 || (request.timingAnalysis?.ambiguousNotes.contains { $0.reason == .multiSpeakerBoundary } == true)
+            let hasDemoSilence = PostTakeCoachingOptionSet.hasStageDirectionSilence(in: request)
+            if hasDemoSilence && hasMultiSpeaker {
+                return "Grounded in the bounded estimated gap around a scripted demo pause " +
+                    "without attributing the pause to any speaker."
+            }
+            if hasDemoSilence {
+                return "Grounded in the bounded estimated gap around a scripted demo pause — " +
+                    "silence during a live step can be intentional."
+            }
             if hasMultiSpeaker {
                 return "Grounded in the bounded estimated gap without attributing the pause to any speaker."
             }
@@ -33,7 +42,8 @@ extension PostTakeCoachingOptionSet {
             return "Grounded in the estimated speaking pace from validated on-device word timing " +
                 "(\(technique.title))."
         case .scriptReveals:
-            return "Grounded in the recorded script reveal count so you can hear and tighten recall."
+            return "Grounded in the recorded script reveal count as an optional recall check, " +
+                "not a performance judgment."
         case .manualMarker:
             return "Anchored to your manual rehearsal marker so playback opens directly on that moment."
         case .alignedPhrase:
@@ -99,12 +109,12 @@ private extension PostTakeCoachingOptionSet {
         switch (template, kind) {
         case (.revealsAnchorRecall, .scriptReveals(let count, _)):
             let word = count == 1 ? "1 script reveal" : "\(count) script reveals"
-            return "You used \(word) on this take; replay the highlighted line once, then retry " +
-                "focusing on that single anchor."
+            return "You used \(word) during this take; if you want to test recall without glancing, " +
+                "replay the highlighted line once and try focusing on that single anchor."
         case (.revealsBridgeTransition, .scriptReveals(let count, _)):
             let word = count == 1 ? "1 script reveal" : "\(count) script reveals"
-            return "You used \(word) on this take; rehearse stepping cleanly into the highlighted " +
-                "line from the transition before your next full retry."
+            return "You used \(word) during this take; if helpful, rehearse stepping into the highlighted " +
+                "line from the transition before your next pass."
         case (.markerRehearseAfterMark, .manualMarker(let timestamp, _, _)):
             let clock = RehearsalTimeFormatter.clockString(for: timestamp)
             return "Jump to your manual marker at \(clock) in playback and try one clean retry " +

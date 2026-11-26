@@ -147,7 +147,11 @@ nonisolated enum CoachingPassageExtractor {
             let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
                   !seen.contains(trimmed),
-                  CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(trimmed, in: source) else {
+                  CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+                      trimmed,
+                      in: source,
+                      allowShortStandalone: role == .markedExactPhrase
+                  ) else {
                 return
             }
             seen.insert(trimmed)
@@ -184,7 +188,7 @@ nonisolated enum CoachingPassageExtractor {
                 candidate: obs.matchedPhrase,
                 source: scriptText,
                 fromHandoff: false,
-                role: .observationAnchor
+                role: obs.kind == .alignedExactPhrase ? .markedExactPhrase : .observationAnchor
             )
             collector.append(
                 id: "passage.obs.follow.\(idx + 1)",
@@ -245,18 +249,26 @@ nonisolated enum CoachingPassageExtractor {
             .filter { !$0.isEmpty }
     }
 
-    static func isVerifiedSpokenVerbatimMatch(_ candidate: String, in source: String) -> Bool {
+    static func isVerifiedSpokenVerbatimMatch(
+        _ candidate: String,
+        in source: String,
+        allowShortStandalone: Bool = false
+    ) -> Bool {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               !containsStageDirectionBrackets(trimmed) else {
             return false
         }
         let words = normalizedWords(in: trimmed)
+        let minSingleWordLength = allowShortStandalone ? 2 : 3
         guard !words.isEmpty,
-              words.count >= 2 || (words[0].count >= 3) else {
+              words.count >= 2 || words[0].count >= minSingleWordLength else {
             return false
         }
-        return containsAtWordBoundaries(trimmed, in: source)
+        let spokenSegments = splitOutsideStageDirections(in: source)
+        return spokenSegments.contains { segment in
+            containsAtWordBoundaries(trimmed, in: segment)
+        }
     }
 
     static func containsStageDirectionBrackets(_ text: String) -> Bool {

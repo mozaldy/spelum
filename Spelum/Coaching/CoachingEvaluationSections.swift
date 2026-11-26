@@ -34,7 +34,7 @@ struct CoachingEvaluationResultsSections: View {
                     .font(.footnote.monospacedDigit().weight(.semibold))
                     .foregroundStyle(stats.totalModelSafetyViolations == 0 ? .green : .red)
             }
-            LabeledContent("Abstention Check (Model)") {
+            LabeledContent("Abstention vs Fixture Tags (Diagnostic)") {
                 Text(
                     "\(stats.modelAbstentionCorrectCount)/\(stats.expectedAbstentionCount) " +
                     "(missed \(stats.modelMissedAbstentionCount), false \(stats.modelFalseAbstentionCount))"

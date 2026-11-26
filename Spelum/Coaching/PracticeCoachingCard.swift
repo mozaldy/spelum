@@ -57,6 +57,7 @@ struct PracticeCoachingCard: View {
                     } else {
                         PracticeCoachingConcealedCueView(
                             isActiveTake: isActiveTake,
+                            reason: policy.reason,
                             onRevealScript: onRevealScript
                         )
                     }
@@ -78,12 +79,18 @@ struct PracticeCoachingCard: View {
                     title: "Edit Pre-Practice Cue",
                     originalAction: cue.action,
                     initialText: cue.displayedAction,
+                    footerNotice: cueWordsEditRevealNotice,
                     onSave: { newText in
                         saveEditedCue(newText)
                     }
                 )
             }
         }
+    }
+
+    private var cueWordsEditRevealNotice: String? {
+        guard practiceMode == .cueWords, !isScriptRevealed else { return nil }
+        return "In Cue Words mode, saving an edited reminder hides it until you reveal the script."
     }
 
     private var headerSection: some View {
