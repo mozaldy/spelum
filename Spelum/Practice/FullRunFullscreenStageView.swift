@@ -107,13 +107,12 @@ struct FullRunFullscreenStageView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 12)
 
-                scriptScrollStage
-
-                FullRunFullscreenControlsDock(
-                    session: session,
-                    isAccessibilitySize: isAccessibilitySize,
-                    onExitFullscreen: onExitFullscreen
-                )
+                if isAccessibilitySize {
+                    accessibilityStageScroll
+                } else {
+                    scriptScrollStage
+                    controlsDock
+                }
             }
         }
         .environment(\.colorScheme, .dark)
@@ -276,6 +275,29 @@ struct FullRunFullscreenStageView: View {
 
     var visiblePromptState: RehearsalVisiblePromptState? {
         fullscreenScriptContent?.visiblePromptState
+    }
+
+    private var accessibilityStageScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    scriptScrollStage
+                        .id("fullscreenScriptStart")
+                    controlsDock
+                }
+            }
+            .onChange(of: session.currentFullRunSlide?.id) { _, _ in
+                proxy.scrollTo("fullscreenScriptStart", anchor: .top)
+            }
+        }
+    }
+
+    private var controlsDock: some View {
+        FullRunFullscreenControlsDock(
+            session: session,
+            isAccessibilitySize: isAccessibilitySize,
+            onExitFullscreen: onExitFullscreen
+        )
     }
 
     private var scriptScrollStage: some View {

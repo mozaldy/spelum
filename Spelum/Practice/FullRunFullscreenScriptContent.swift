@@ -75,7 +75,7 @@ struct FullRunFullscreenScriptContent: View {
             isAccessibilitySize: isAccessibilitySize,
             theme: .fullscreenStage,
             storageRootURL: storageRootURL,
-            fillsAvailableHeight: true,
+            fillsAvailableHeight: !isAccessibilitySize,
             scriptScrollMaxHeight: nil,
             scriptAccessibilityIdentifier: "fullRunFullscreenScriptText",
             revealButtonAccessibilityIdentifier: "fullRunFullscreenRevealButton",

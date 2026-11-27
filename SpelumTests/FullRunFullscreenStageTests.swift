@@ -99,6 +99,50 @@ struct FullRunFullscreenStageTests {
         }
     }
 
+    @Test("Accessibility stage provides scrolling room for slide content and run controls")
+    func accessibilityStageScrollsPastTheScript() throws {
+        let workspace = try PracticeTestWorkspace.create(prefix: "FullscreenAccessibility")
+        defer { workspace.cleanup() }
+        let container = try PresentationStore.makeModelContainer(storeURL: workspace.storeURL)
+        let context = container.mainContext
+        let library = PresentationStore(modelContext: context, storageRootURL: workspace.storageRoot)
+        let attempts = AttemptStore(modelContext: context, storageRootURL: workspace.storageRoot)
+        let seeded = try AnnotatedSlideRehearsalTests.seedTwoSectionFiveSlideTalk(in: library, workspace: workspace)
+        let session = FullRunTestFixtures.makeSession(
+            attemptStore: attempts,
+            snapshot: seeded.snapshot,
+            initialMode: .cueWords,
+            recorder: SteppableFullRunRecorder()
+        )
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        let stage = FullRunFullscreenStageView(
+            session: session,
+            snapshot: seeded.snapshot,
+            isAccessibilitySize: true,
+            onExitFullscreen: {}
+        )
+        .environment(\.dynamicTypeSize, .accessibility5)
+        let host = UIHostingController(rootView: stage)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 720)
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.06))
+
+        let scrollView = try #require(firstScrollView(in: host.view))
+        #expect(scrollView.bounds.height > host.view.bounds.height / 2)
+        #expect(scrollView.contentSize.height > scrollView.bounds.height)
+    }
+
+    private func firstScrollView(in view: UIView) -> UIScrollView? {
+        if let scrollView = view as? UIScrollView {
+            return scrollView
+        }
+        return view.subviews.lazy.compactMap { firstScrollView(in: $0) }.first
+    }
+
     private func renderFullscreenStage(
         session: RecordingSession,
         snapshot: FullRunSnapshot,
