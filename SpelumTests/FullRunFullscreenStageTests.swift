@@ -101,6 +101,27 @@ struct FullRunFullscreenStageTests {
 
     @Test("Accessibility stage provides scrolling room for slide content and run controls")
     func accessibilityStageScrollsPastTheScript() throws {
+        try assertStageScrollsPastScript(
+            size: CGSize(width: 393, height: 720),
+            dynamicTypeSize: .accessibility5,
+            verticalSizeClass: .regular
+        )
+    }
+
+    @Test("Landscape stage provides scrolling room for slide content and run controls")
+    func compactHeightStageScrollsPastTheScript() throws {
+        try assertStageScrollsPastScript(
+            size: CGSize(width: 874, height: 402),
+            dynamicTypeSize: .large,
+            verticalSizeClass: .compact
+        )
+    }
+
+    private func assertStageScrollsPastScript(
+        size: CGSize,
+        dynamicTypeSize: DynamicTypeSize,
+        verticalSizeClass: UserInterfaceSizeClass
+    ) throws {
         let workspace = try PracticeTestWorkspace.create(prefix: "FullscreenAccessibility")
         defer { workspace.cleanup() }
         let container = try PresentationStore.makeModelContainer(storeURL: workspace.storeURL)
@@ -119,15 +140,16 @@ struct FullRunFullscreenStageTests {
         let stage = FullRunFullscreenStageView(
             session: session,
             snapshot: seeded.snapshot,
-            isAccessibilitySize: true,
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
             onExitFullscreen: {}
         )
-        .environment(\.dynamicTypeSize, .accessibility5)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .environment(\.verticalSizeClass, verticalSizeClass)
         let host = UIHostingController(rootView: stage)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 720)
+        host.view.frame = CGRect(origin: .zero, size: size)
         host.view.layoutIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.06))
 

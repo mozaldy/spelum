@@ -88,6 +88,8 @@ struct FullRunGlowingBlueBackground: View {
 }
 
 struct FullRunFullscreenStageView: View {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
     let session: RecordingSession
     let snapshot: FullRunSnapshot
     let isAccessibilitySize: Bool
@@ -95,6 +97,10 @@ struct FullRunFullscreenStageView: View {
 
     private var activeSection: FullRunSectionSnapshot? {
         session.currentFullRunSection ?? snapshot.sections.first
+    }
+
+    private var usesStageScroll: Bool {
+        isAccessibilitySize || verticalSizeClass == .compact
     }
 
     var body: some View {
@@ -107,8 +113,8 @@ struct FullRunFullscreenStageView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 12)
 
-                if isAccessibilitySize {
-                    accessibilityStageScroll
+                if usesStageScroll {
+                    scrollableStage
                 } else {
                     scriptScrollStage
                     controlsDock
@@ -255,6 +261,7 @@ struct FullRunFullscreenStageView: View {
             revealCount: session.revealCount,
             isActiveTake: session.isActiveTake,
             isAccessibilitySize: isAccessibilitySize,
+            usesStageScroll: usesStageScroll,
             storageRootURL: session.attemptStore.storageRootURL,
             canGoPrevious: session.canRetreatFullRunStep,
             previousButtonLabel: session.hasPreviousSlideInCurrentSection
@@ -277,7 +284,7 @@ struct FullRunFullscreenStageView: View {
         fullscreenScriptContent?.visiblePromptState
     }
 
-    private var accessibilityStageScroll: some View {
+    private var scrollableStage: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {

@@ -10,6 +10,7 @@ struct FullRunFullscreenScriptContent: View {
     let revealCount: Int
     let isActiveTake: Bool
     let isAccessibilitySize: Bool
+    let usesStageScroll: Bool
     let storageRootURL: URL
     let canGoPrevious: Bool
     let previousButtonLabel: String
@@ -30,6 +31,7 @@ struct FullRunFullscreenScriptContent: View {
         revealCount: Int,
         isActiveTake: Bool = false,
         isAccessibilitySize: Bool,
+        usesStageScroll: Bool,
         storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL(),
         canGoPrevious: Bool = false,
         previousButtonLabel: String = "Previous",
@@ -49,6 +51,7 @@ struct FullRunFullscreenScriptContent: View {
         self.revealCount = revealCount
         self.isActiveTake = isActiveTake
         self.isAccessibilitySize = isAccessibilitySize
+        self.usesStageScroll = usesStageScroll
         self.storageRootURL = storageRootURL
         self.canGoPrevious = canGoPrevious
         self.previousButtonLabel = previousButtonLabel
@@ -75,7 +78,7 @@ struct FullRunFullscreenScriptContent: View {
             isAccessibilitySize: isAccessibilitySize,
             theme: .fullscreenStage,
             storageRootURL: storageRootURL,
-            fillsAvailableHeight: !isAccessibilitySize,
+            fillsAvailableHeight: !usesStageScroll,
             scriptScrollMaxHeight: nil,
             scriptAccessibilityIdentifier: "fullRunFullscreenScriptText",
             revealButtonAccessibilityIdentifier: "fullRunFullscreenRevealButton",
