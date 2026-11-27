@@ -30,6 +30,18 @@ struct SectionRowView: View {
                     .foregroundStyle(.tint)
             }
 
+            if !section.slideReferences.isEmpty {
+                let count = section.slideReferences.count
+                let hasPDF = section.slideReferences.contains { $0.pdfPageIndex != nil }
+                let slideText = count == 1 ? "1 slide" : "\(count) slides"
+                Label(
+                    hasPDF ? "\(slideText) · PDF paired" : slideText,
+                    systemImage: hasPDF ? "rectangle.stack.fill" : "rectangle.stack"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             if savedTakeCount > 0 {
                 Label(
                     savedTakeCount == 1 ? "1 saved take" : "\(savedTakeCount) saved takes",

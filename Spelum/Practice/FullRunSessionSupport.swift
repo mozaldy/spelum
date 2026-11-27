@@ -20,13 +20,55 @@ extension RecordingSession {
         return fullRunSnapshot.sections[nextIndex]
     }
 
+    var currentFullRunSlides: [ResolvedRehearsalSlide] {
+        guard let section = currentFullRunSection else { return [] }
+        return RehearsalSlideResolver.resolveSlides(for: section)
+    }
+
+    var currentFullRunSlide: ResolvedRehearsalSlide? {
+        let slides = currentFullRunSlides
+        guard !slides.isEmpty else { return nil }
+        let clamped = min(max(currentFullRunSlideIndex, 0), slides.count - 1)
+        return slides[clamped]
+    }
+
+    var nextSlideInCurrentSection: ResolvedRehearsalSlide? {
+        let slides = currentFullRunSlides
+        let nextIndex = currentFullRunSlideIndex + 1
+        guard slides.indices.contains(nextIndex) else { return nil }
+        return slides[nextIndex]
+    }
+
+    var hasNextSlideInCurrentSection: Bool {
+        nextSlideInCurrentSection != nil
+    }
+
+    var hasPreviousSlideInCurrentSection: Bool {
+        currentFullRunSlideIndex > 0
+    }
+
     var canAdvanceFullRunSection: Bool {
         isActiveTake && nextFullRunSection != nil
+    }
+
+    var canAdvanceFullRunStep: Bool {
+        hasNextSlideInCurrentSection || nextFullRunSection != nil
+    }
+
+    var canRetreatFullRunStep: Bool {
+        if hasPreviousSlideInCurrentSection {
+            return true
+        }
+        return !isActiveTake && currentFullRunSectionIndex > 0
     }
 
     var isOnFinalFullRunSection: Bool {
         guard let fullRunSnapshot else { return true }
         return currentFullRunSectionIndex >= max(0, fullRunSnapshot.sections.count - 1)
+    }
+
+    var isOnFinalFullRunStep: Bool {
+        isOnFinalFullRunSection && !hasNextSlideInCurrentSection
     }
 
     var currentSectionElapsedDuration: TimeInterval {
@@ -41,8 +83,47 @@ extension RecordingSession {
         fullRunSnapshot = newSnapshot
         snapshot = newSnapshot.makeAttemptSnapshotReference()
         currentFullRunSectionIndex = 0
+        currentFullRunSlideIndex = 0
         fullRunTransitions = []
         isScriptRevealed = false
+    }
+
+    func selectFullRunSlide(index: Int) {
+        let slides = currentFullRunSlides
+        guard !slides.isEmpty else { return }
+        currentFullRunSlideIndex = min(max(index, 0), slides.count - 1)
+        isScriptRevealed = false
+    }
+
+    @discardableResult
+    func advanceFullRunStep() -> Bool {
+        if hasNextSlideInCurrentSection {
+            currentFullRunSlideIndex += 1
+            isScriptRevealed = false
+            return true
+        }
+        guard nextFullRunSection != nil else { return false }
+        if isActiveTake {
+            return advanceFullRunSection() != nil
+        }
+        currentFullRunSectionIndex += 1
+        currentFullRunSlideIndex = 0
+        isScriptRevealed = false
+        return true
+    }
+
+    @discardableResult
+    func retreatFullRunStep() -> Bool {
+        if hasPreviousSlideInCurrentSection {
+            currentFullRunSlideIndex -= 1
+            isScriptRevealed = false
+            return true
+        }
+        guard !isActiveTake, currentFullRunSectionIndex > 0 else { return false }
+        currentFullRunSectionIndex -= 1
+        currentFullRunSlideIndex = max(0, currentFullRunSlides.count - 1)
+        isScriptRevealed = false
+        return true
     }
 
     @discardableResult
@@ -78,6 +159,7 @@ extension RecordingSession {
         }
 
         currentFullRunSectionIndex += 1
+        currentFullRunSlideIndex = 0
         isScriptRevealed = false
 
         let nextSection = fullRunSnapshot.sections[currentFullRunSectionIndex]
@@ -128,9 +210,11 @@ extension RecordingSession {
         guard let fullRunSnapshot, let firstSection = fullRunSnapshot.sections.first else {
             fullRunTransitions = []
             currentFullRunSectionIndex = 0
+            currentFullRunSlideIndex = 0
             return
         }
         currentFullRunSectionIndex = 0
+        currentFullRunSlideIndex = 0
         fullRunTransitions = [
             FullRunSectionTransition(
                 runIndex: firstSection.runIndex,

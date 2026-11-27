@@ -104,6 +104,47 @@ struct FullRunSectionSnapshot: Identifiable, Codable, Equatable, Hashable, Senda
     let handoffPrecedingSpeaker: String?
     let handoffPrecedingSectionTitle: String?
     let handoffIsSpeakerChange: Bool
+    let slideReferences: [SectionSlideReference]?
+
+    init(
+        runIndex: Int,
+        talkSectionIndex: Int,
+        sectionID: UUID,
+        sectionRevisionID: UUID,
+        title: String,
+        text: String,
+        speaker: String,
+        speakerRole: SpeakerRole,
+        purpose: SectionPurpose,
+        cueWords: [String],
+        exactPhrase: String?,
+        handoffCueText: String?,
+        handoffPrecedingSpeaker: String?,
+        handoffPrecedingSectionTitle: String?,
+        handoffIsSpeakerChange: Bool,
+        slideReferences: [SectionSlideReference]? = nil
+    ) {
+        self.runIndex = runIndex
+        self.talkSectionIndex = talkSectionIndex
+        self.sectionID = sectionID
+        self.sectionRevisionID = sectionRevisionID
+        self.title = title
+        self.text = text
+        self.speaker = speaker
+        self.speakerRole = speakerRole
+        self.purpose = purpose
+        self.cueWords = cueWords
+        self.exactPhrase = exactPhrase
+        self.handoffCueText = handoffCueText
+        self.handoffPrecedingSpeaker = handoffPrecedingSpeaker
+        self.handoffPrecedingSectionTitle = handoffPrecedingSectionTitle
+        self.handoffIsSpeakerChange = handoffIsSpeakerChange
+        self.slideReferences = slideReferences
+    }
+
+    var resolvedSlideReferences: [SectionSlideReference] {
+        slideReferences ?? []
+    }
 
     var speakerSummary: String {
         let trimmed = speaker.trimmingCharacters(in: .whitespacesAndNewlines)

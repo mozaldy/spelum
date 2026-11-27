@@ -154,6 +154,11 @@ extension AttemptStore {
 
     func deletePresentationAndAttempts(_ presentation: PresentationRecord) throws {
         let presentationID = presentation.id
+        let presentationStore = PresentationStore(
+            modelContext: modelContext,
+            storageRootURL: storageRootURL
+        )
+        let candidateDeckPaths = presentationStore.collectDeckPaths(for: presentation)
         let attempts = try fetchAttempts(forPresentationID: presentationID, includeInProgress: true)
         let manifestScan = try loadPendingSaveManifestEntries()
         let matchingManifests = manifestScan.manifests.filter {
@@ -173,6 +178,7 @@ extension AttemptStore {
             modelContext.delete(presentation)
         }
 
+        presentationStore.removeUnreferencedDeckFiles(candidates: candidateDeckPaths)
         try cleanupDeletedPresentationArtifacts(
             attemptTargets: attemptTargets,
             matchingManifests: matchingManifests

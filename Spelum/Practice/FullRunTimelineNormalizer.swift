@@ -176,7 +176,8 @@ extension PresentationStore {
                 handoffCueText: handoff?.effectiveCueText,
                 handoffPrecedingSpeaker: handoff?.precedingSpeaker,
                 handoffPrecedingSectionTitle: handoff?.precedingSectionTitle,
-                handoffIsSpeakerChange: handoff?.isSpeakerChange ?? false
+                handoffIsSpeakerChange: handoff?.isSpeakerChange ?? false,
+                slideReferences: section.slideReferences.isEmpty ? nil : section.slideReferences
             )
         }
 

@@ -19,6 +19,7 @@ final class RecordingSession {
     var fullRunSnapshot: FullRunSnapshot?
     var fullRunTransitions: [FullRunSectionTransition] = []
     var currentFullRunSectionIndex = 0
+    var currentFullRunSlideIndex = 0
     var isScriptRevealed = false
     var revealCount = 0
     var markers: [AttemptMarker] = []

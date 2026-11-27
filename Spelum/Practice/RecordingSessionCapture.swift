@@ -74,6 +74,7 @@ extension RecordingSession {
             clearActiveState()
             fullRunTransitions = []
             currentFullRunSectionIndex = 0
+            currentFullRunSlideIndex = 0
             phase = .error(error.localizedDescription)
         }
     }
@@ -149,6 +150,7 @@ extension RecordingSession {
         hasObservedRecorderTime = false
         fullRunTransitions = []
         currentFullRunSectionIndex = 0
+        currentFullRunSlideIndex = 0
     }
 
     func clearActiveState() {

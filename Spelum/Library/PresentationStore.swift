@@ -13,13 +13,16 @@ final class PresentationStore {
     ])
 
     let modelContext: ModelContext
+    let storageRootURL: URL
     private let saveContext: (ModelContext) throws -> Void
 
     init(
         modelContext: ModelContext,
+        storageRootURL: URL? = nil,
         saveContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) {
         self.modelContext = modelContext
+        self.storageRootURL = storageRootURL ?? SlideDeckStorage.defaultStorageRootURL()
         self.saveContext = saveContext
     }
 
@@ -178,59 +181,7 @@ final class PresentationStore {
 
     // MARK: - Unified Import Path
 
-    @discardableResult
-    func importScript(text: String, title: String? = nil) throws -> PresentationRecord {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PresentationImportError.emptyScript
-        }
-
-        return try performAtomicWrite {
-            let now = Date()
-            let resolvedTitle = Self.resolvedTitle(explicit: title, fallbackText: text)
-            let presentation = PresentationRecord(
-                title: resolvedTitle,
-                sourceText: text,
-                createdAt: now,
-                updatedAt: now
-            )
-            let initialSection = SectionRevisionRecord(
-                title: "Section 1",
-                text: text,
-                speaker: SpeakerRole.presenter.displayName,
-                speakerRole: .presenter,
-                purpose: .general,
-                createdAt: now,
-                presentation: presentation
-            )
-            let initialRevision = TalkRevisionRecord(
-                revisionNumber: 1,
-                title: resolvedTitle,
-                changeSummary: "Imported script",
-                createdAt: now,
-                presentation: presentation
-            )
-            let entry = TalkRevisionEntryRecord(
-                orderIndex: 0,
-                sectionRevisionID: initialSection.revisionID,
-                talkRevision: initialRevision,
-                sectionRevision: initialSection
-            )
-
-            initialRevision.entries.append(entry)
-            presentation.sectionRevisions.append(initialSection)
-            presentation.talkRevisions.append(initialRevision)
-            presentation.currentRevisionID = initialRevision.id
-
-            modelContext.insert(presentation)
-            modelContext.insert(initialSection)
-            modelContext.insert(initialRevision)
-            modelContext.insert(entry)
-            return presentation
-        }
-    }
-
-    @discardableResult
-    func importScript(fromFileURL url: URL, title: String? = nil) throws -> PresentationRecord {
+    static func readUTF8ScriptFile(at url: URL) throws -> (text: String, suggestedTitle: String?) {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -242,18 +193,75 @@ final class PresentationStore {
             throw PresentationImportError.invalidUTF8
         }
 
-        let trimmedExplicit = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let fileTitle = url.deletingPathExtension().lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (decodedText, fileTitle.isEmpty ? nil : fileTitle)
+    }
+
+    @discardableResult
+    func importScript(
+        text: String,
+        title: String? = nil,
+        pdfFileURL: URL? = nil
+    ) throws -> PresentationRecord {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PresentationImportError.emptyScript
+        }
+
+        let parsed = AnnotatedScriptParser.parseDocument(text)
+        var copiedDeck: CopiedSlideDeck?
+        if let pdfFileURL {
+            let inspected = try SlideDeckStorage.inspectPDF(at: pdfFileURL)
+            let plan = SlidePairingPlan.build(
+                scriptText: text,
+                pdfPageCount: inspected.pageCount,
+                pdfAspectRatios: inspected.pageAspectRatios
+            )
+            guard plan.isValidForImport else {
+                throw PresentationImportError.slideCountMismatch(
+                    headings: plan.explicitHeadingCount,
+                    pages: inspected.pageCount
+                )
+            }
+            copiedDeck = try SlideDeckStorage.copyPDFToAppStorage(
+                from: pdfFileURL,
+                storageRootURL: storageRootURL
+            )
+        }
+
+        do {
+            return try persistImportedPresentation(
+                text: text,
+                title: title,
+                parsed: parsed,
+                copiedDeck: copiedDeck
+            )
+        } catch {
+            if let deckPath = copiedDeck?.relativePath {
+                SlideDeckStorage.removeDeckFile(
+                    relativePath: deckPath,
+                    storageRootURL: storageRootURL
+                )
+            }
+            throw error
+        }
+    }
+
+    @discardableResult
+    func importScript(
+        fromFileURL url: URL,
+        title: String? = nil,
+        pdfFileURL: URL? = nil
+    ) throws -> PresentationRecord {
+        let loaded = try Self.readUTF8ScriptFile(at: url)
+        let trimmedExplicit = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let chosenTitle: String?
         if let trimmedExplicit, !trimmedExplicit.isEmpty {
             chosenTitle = trimmedExplicit
-        } else if !fileTitle.isEmpty {
-            chosenTitle = fileTitle
         } else {
-            chosenTitle = nil
+            chosenTitle = loaded.suggestedTitle
         }
 
-        return try importScript(text: decodedText, title: chosenTitle)
+        return try importScript(text: loaded.text, title: chosenTitle, pdfFileURL: pdfFileURL)
     }
 }

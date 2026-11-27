@@ -62,117 +62,14 @@ nonisolated enum EnglishWordTokenizer {
         from scriptText: String,
         knownSpeakerNames: [String] = []
     ) -> ScriptStructure {
-        let normalizedSpeakers = Set(
-            knownSpeakerNames
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { !$0.isEmpty }
-        )
-        let ranges = findStageDirectionRanges(in: scriptText)
-        guard !ranges.isEmpty else {
-            return ScriptStructure(
-                spokenText: scriptText,
-                stageDirections: [],
-                hasInteriorStageDirection: false,
-                hasTrailingStageDirection: false,
-                spokenCandidatePhrases: extractSpokenCandidatePhrases(
-                    from: scriptText,
-                    knownSpeakerNames: normalizedSpeakers
-                )
-            )
-        }
-
-        var spoken = ""
-        var stageDirections: [String] = []
-        var cursor = scriptText.startIndex
-        var hasInterior = false
-        var hasTrailing = false
-
-        for directionRange in ranges {
-            spoken.append(String(scriptText[cursor ..< directionRange.lowerBound]))
-            let directionText = String(scriptText[directionRange])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            stageDirections.append(directionText)
-
-            let beforeHasWord = !tokenize(String(scriptText[..<directionRange.lowerBound])).isEmpty
-            let afterHasWord = !tokenize(String(scriptText[directionRange.upperBound...])).isEmpty
-            if beforeHasWord && afterHasWord {
-                hasInterior = true
-            } else if beforeHasWord && !afterHasWord {
-                hasTrailing = true
-            }
-            cursor = directionRange.upperBound
-        }
-        spoken.append(String(scriptText[cursor...]))
-
-        return ScriptStructure(
-            spokenText: spoken,
-            stageDirections: stageDirections,
-            hasInteriorStageDirection: hasInterior,
-            hasTrailingStageDirection: hasTrailing,
-            spokenCandidatePhrases: extractSpokenCandidatePhrases(
-                from: spoken,
-                knownSpeakerNames: normalizedSpeakers
-            )
+        AnnotatedScriptParser.extractTimingStructure(
+            from: scriptText,
+            knownSpeakerNames: knownSpeakerNames
         )
     }
 
     static func stripStageDirections(from text: String) -> String {
         extractScriptStructure(from: text).spokenText
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func findStageDirectionRanges(in text: String) -> [Range<String.Index>] {
-        // Only treat explicit bracketed cues [like this] as stage directions.
-        // Ordinary parenthetical prose (like this) is spoken dialogue and must be preserved.
-        let pattern = #"\[[^\[\]\n]+\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let fullRange = NSRange(text.startIndex ..< text.endIndex, in: text)
-        return regex.matches(in: text, range: fullRange).compactMap { match in
-            Range(match.range, in: text)
-        }
-    }
-
-    private static func extractSpokenCandidatePhrases(
-        from spokenText: String,
-        knownSpeakerNames: Set<String>
-    ) -> [String] {
-        let lines = spokenText.components(separatedBy: .newlines)
-        var phrases: [String] = []
-
-        for rawLine in lines {
-            let trimmed = stripKnownSpeakerPrefix(from: rawLine, knownSpeakerNames: knownSpeakerNames)
-            guard !trimmed.isEmpty else { continue }
-            let sentenceTokenizer = NLTokenizer(unit: .sentence)
-            sentenceTokenizer.string = trimmed
-            sentenceTokenizer.setLanguage(.english)
-            sentenceTokenizer.enumerateTokens(in: trimmed.startIndex ..< trimmed.endIndex) { range, _ in
-                let sentence = String(trimmed[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if tokenize(sentence).count >= 2 {
-                    phrases.append(sentence)
-                }
-                return true
-            }
-        }
-        return phrases
-    }
-
-    private static func stripKnownSpeakerPrefix(
-        from line: String,
-        knownSpeakerNames: Set<String>
-    ) -> String {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !knownSpeakerNames.isEmpty,
-              let colonIndex = trimmed.firstIndex(of: ":") else {
-            return trimmed
-        }
-        let prefix = String(trimmed[..<colonIndex])
-            .trimmingCharacters(in: .whitespaces)
-            .lowercased()
-        guard knownSpeakerNames.contains(prefix) else {
-            return trimmed
-        }
-        let remainderIndex = trimmed.index(after: colonIndex)
-        let remainder = String(trimmed[remainderIndex...]).trimmingCharacters(in: .whitespaces)
-        return remainder.isEmpty ? trimmed : remainder
     }
 }

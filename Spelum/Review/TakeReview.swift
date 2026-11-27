@@ -178,7 +178,7 @@ struct TakeReview: View {
             onAddMarkerAtCurrentTime: { addManualMarker(label: nil) }
         )
 
-        FullRunReviewScriptCard(snapshot: payload.snapshot)
+        FullRunReviewScriptCard(snapshot: payload.snapshot, storageRootURL: presentationStore.storageRootURL)
     }
 
     @ViewBuilder
@@ -234,7 +234,8 @@ struct TakeReview: View {
         if let sectionRevision = context.sectionRevision {
             TakeReviewScriptCard(
                 section: sectionRevision,
-                revisionNumber: attempt.talkRevisionNumber
+                revisionNumber: attempt.talkRevisionNumber,
+                storageRootURL: presentationStore.storageRootURL
             )
         }
     }

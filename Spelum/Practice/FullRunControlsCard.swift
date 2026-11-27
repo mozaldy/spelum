@@ -144,9 +144,27 @@ struct FullRunControlsCard: View {
     private var activeRunButtons: some View {
         let isSilent = session.phase == .silentRecall
         return VStack(spacing: 10) {
-            if let nextSection = session.nextFullRunSection {
+            if let nextSlide = session.nextSlideInCurrentSection,
+               let activeSection = session.currentFullRunSection {
                 Button {
-                    _ = session.advanceFullRunSection()
+                    _ = session.advanceFullRunStep()
+                } label: {
+                    VStack(spacing: 2) {
+                        Label("Next Slide: \(nextSlide.slideTitle)", systemImage: "arrow.right.circle.fill")
+                            .font(.headline)
+                        Text("\(nextSlide.positionLabel) · \(activeSection.title)")
+                            .font(.caption)
+                            .opacity(0.9)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 54)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Advance to \(nextSlide.slideTitle), \(nextSlide.positionLabel)")
+                .accessibilityHint("Moves to the next slide within the current section while recording continues.")
+                .accessibilityIdentifier("advanceFullRunSectionButton")
+            } else if let nextSection = session.nextFullRunSection {
+                Button {
+                    _ = session.advanceFullRunStep()
                 } label: {
                     VStack(spacing: 2) {
                         Label("Next Section: \(nextSection.title)", systemImage: "arrow.right.circle.fill")
