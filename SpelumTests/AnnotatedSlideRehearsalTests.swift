@@ -239,3 +239,67 @@ struct AnnotatedSlideRehearsalTests {
         )
     }
 }
+
+@Suite("Enlarged Slide Sheet Title Formatting")
+@MainActor
+struct EnlargedSlideSheetTitleTests {
+    @Test("Enlarged slide sheet avoids repeating slide-number prefixes")
+    func enlargedSlideSheetAvoidsRepeatingSlidePrefix() {
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 3,
+                pageIndex: 0,
+                visibleSlideTitle: "Reliable Rehearsal"
+            ) == "Slide 1: Reliable Rehearsal"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 3,
+                pageIndex: 0,
+                visibleSlideTitle: "Slide 1: Reliable Rehearsal"
+            ) == "Slide 1: Reliable Rehearsal"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 3,
+                pageIndex: 0,
+                visibleSlideTitle: "Slide 1"
+            ) == "Slide 1"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 2,
+                totalSlides: 3,
+                pageIndex: 1,
+                visibleSlideTitle: "slide 2 — Core Problem"
+            ) == "slide 2 — Core Problem"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 1,
+                pageIndex: 2,
+                visibleSlideTitle: "Slide 3: On-Device Flow"
+            ) == "Slide 3: On-Device Flow"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 3,
+                pageIndex: 0,
+                visibleSlideTitle: "Slides Overview"
+            ) == "Slide 1: Slides Overview"
+        )
+        #expect(
+            EnlargedSlideSheet.resolvedSheetTitle(
+                slideNumber: 1,
+                totalSlides: 2,
+                pageIndex: 0,
+                visibleSlideTitle: nil
+            ) == "Slide 1 of 2 · Page 1"
+        )
+    }
+}

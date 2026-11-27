@@ -216,9 +216,33 @@ struct EnlargedSlideSheet: View {
     }
 
     private var sheetTitle: String {
-        if let title = visibleSlideTitle, !title.isEmpty {
+        Self.resolvedSheetTitle(
+            slideNumber: slideNumber,
+            totalSlides: totalSlides,
+            pageIndex: pageIndex,
+            visibleSlideTitle: visibleSlideTitle
+        )
+    }
+
+    static func resolvedSheetTitle(
+        slideNumber: Int,
+        totalSlides: Int,
+        pageIndex: Int,
+        visibleSlideTitle: String?
+    ) -> String {
+        if let title = visibleSlideTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            if startsWithSlideNumberPrefix(title) {
+                return title
+            }
             return "Slide \(slideNumber): \(title)"
         }
         return "Slide \(slideNumber) of \(max(totalSlides, 1)) · Page \(pageIndex + 1)"
+    }
+
+    private static func startsWithSlideNumberPrefix(_ title: String) -> Bool {
+        title.range(
+            of: #"^slide\s+\d+(?:$|[\s:.\-–—·])"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 }
