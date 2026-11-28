@@ -271,3 +271,98 @@ struct SectionCoachTests {
         #expect(abstainResult.observationID == nil)
     }
 }
+
+@Suite("Annotated Script Coaching Grounding")
+@MainActor
+struct AnnotatedScriptCoachingTests {
+    @Test("Coaching passages ignore slide headings and inline cue markup")
+    func coachingPassagesIgnoreSlideHeadingsAndInlineAnnotations() async {
+        let annotatedScript = """
+        # Opening Hook
+        ## Slide 1: Reliable Rehearsal
+        [Step forward and smile]
+        Welcome everyone / to our live rehearsal \u{2197} //
+        Let us begin ///
+
+        ## Slide 2: Core Problem
+        [Point at the slide diagram]
+        Why do presenters lose their flow \u{2198}
+        """
+
+        #expect(
+            CoachingPassageExtractor.firstSpokenSentence(in: annotatedScript)
+                == "Welcome everyone to our live rehearsal"
+        )
+        #expect(!CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+            "## Slide 1: Reliable Rehearsal",
+            in: annotatedScript
+        ))
+        #expect(!CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+            "Slide 1: Reliable Rehearsal",
+            in: annotatedScript
+        ))
+        #expect(CoachingPassageExtractor.isVerifiedSpokenVerbatimMatch(
+            "Welcome everyone to our live rehearsal",
+            in: annotatedScript
+        ))
+
+        let passages = CoachingPassageExtractor.extractPassages(
+            scriptText: annotatedScript,
+            exactPhrase: nil,
+            handoffCueText: nil,
+            observations: []
+        )
+        #expect(passages.map(\.phrase) == [
+            "Welcome everyone to our live rehearsal",
+            "Let us begin",
+            "Why do presenters lose their flow"
+        ])
+
+        let prepRequest = PreparationCoachingRequest(
+            sectionRevisionID: UUID(),
+            talkRevisionID: UUID(),
+            sectionTitle: "Opening Hook",
+            scriptText: annotatedScript,
+            exactPhrase: nil,
+            cueWords: ["rehearsal", "flow"],
+            purpose: .general,
+            handoffCueText: nil,
+            isSpeakerChangeHandoff: false,
+            knownSpeakerNames: ["Presenter"],
+            selectedTechniqueID: nil,
+            candidateTechniques: TechniqueLibrary.candidateTechniques(for: .general, hasHandoff: false),
+            promptVersion: SectionCoachService.preparationPromptVersion
+        )
+        let service = SectionCoachService(
+            modelProvider: StubCoachingModelProvider(availabilityState: .unavailable(.modelNotReady))
+        )
+        let cue = await service.generatePreparationCue(request: prepRequest, mode: .onDeviceModel)
+        #expect(cue.exactPhrase == "Welcome everyone to our live rehearsal")
+    }
+
+    @Test("Heading-only annotated section requires coaching abstention")
+    func headingOnlyAnnotatedSectionRequiresAbstention() {
+        let headingOnlyScript = """
+        ## Slide 1: Logo Reveal
+        [Reveal the logo and pause]
+        """
+        #expect(CoachingPassageExtractor.spokenWordCount(in: headingOnlyScript) == 0)
+        #expect(CoachingPassageExtractor.firstSpokenSentence(in: headingOnlyScript) == nil)
+        let headingOnlyRequest = PreparationCoachingRequest(
+            sectionRevisionID: UUID(),
+            talkRevisionID: UUID(),
+            sectionTitle: "Logo Reveal",
+            scriptText: headingOnlyScript,
+            exactPhrase: nil,
+            cueWords: [],
+            purpose: .reveal,
+            handoffCueText: nil,
+            isSpeakerChangeHandoff: false,
+            knownSpeakerNames: ["Presenter"],
+            selectedTechniqueID: nil,
+            candidateTechniques: TechniqueLibrary.candidateTechniques(for: .reveal, hasHandoff: false),
+            promptVersion: SectionCoachService.preparationPromptVersion
+        )
+        #expect(PreparationCoachingOptionSet.build(for: headingOnlyRequest).mustAbstain)
+    }
+}

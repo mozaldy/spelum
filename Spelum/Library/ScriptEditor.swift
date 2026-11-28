@@ -175,7 +175,7 @@ struct ScriptEditor: View {
                     handoff: handoff,
                     handoffCue: $draftHandoffCue,
                     onPresentHandoff: { showingHandoffPreview = true },
-                    onStartPractice: startPracticePreservingDraft
+                    onStartPractice: { startPracticePreservingDraft() }
                 )
             }
             ScriptEditorDetailsSection(
@@ -199,13 +199,25 @@ struct ScriptEditor: View {
                     if let selected = selectedNonEmptyText { draftExactPhrase = selected }
                 }
             )
+            let resolvedSlides = RehearsalSlideResolver.resolveSlides(for: record)
+            if resolvedSlides.count > 1 || resolvedSlides.contains(where: \.hasSlideArtwork) {
+                ScriptEditorSlidesSection(
+                    slides: resolvedSlides,
+                    storageRootURL: store.storageRootURL,
+                    onPracticeFromSlide: { slideIndex in
+                        startPracticePreservingDraft(initialSlideIndex: slideIndex)
+                    }
+                )
+            }
             ScriptEditorExactPhraseSection(scriptText: draftText, exactPhrase: $draftExactPhrase)
             ScriptEditorCueWordsSection(cueWords: $draftCueWords, newCueWord: $newCueWord)
             revisionFooterSection(for: record)
         }
     }
+}
 
-    private func revisionFooterSection(for record: SectionRevisionRecord) -> some View {
+private extension ScriptEditor {
+    func revisionFooterSection(for record: SectionRevisionRecord) -> some View {
         Section("Revision") {
             LabeledContent("Talk Revision", value: "Revision \(currentTalkRevisionNumber)")
             if let index = currentSectionIndex {
@@ -261,7 +273,7 @@ struct ScriptEditor: View {
         startPracticePreservingDraft()
     }
 
-    private func startPracticePreservingDraft() {
+    private func startPracticePreservingDraft(initialSlideIndex: Int = 0) {
         guard let talkRevision = store.currentTalkRevision(for: presentation),
               let section = currentSection else {
             return
@@ -272,6 +284,7 @@ struct ScriptEditor: View {
             talkRevisionID: talkRevision.id,
             sectionRevisionID: section.revisionID,
             initialMode: .cueWords,
+            initialSlideIndex: initialSlideIndex,
             hasUnsavedEditorDraft: hasUnsavedChanges
         )
         onPracticeSection(target)

@@ -3,12 +3,49 @@ import SwiftUI
 struct TakeReviewScriptCard: View {
     let section: SectionRevisionRecord
     let revisionNumber: Int
+    let storageRootURL: URL
+
+    init(
+        section: SectionRevisionRecord,
+        revisionNumber: Int,
+        storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL()
+    ) {
+        self.section = section
+        self.revisionNumber = revisionNumber
+        self.storageRootURL = storageRootURL
+    }
 
     var body: some View {
+        let slides = RehearsalSlideResolver.resolveSlides(for: section)
         VStack(alignment: .leading, spacing: 10) {
             Label("Snapshotted Script (Revision \(revisionNumber))", systemImage: "doc.text")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
+
+            if slides.contains(where: \.hasSlideArtwork) || slides.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(slides) { slide in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let pdfURL = slide.resolvedDeckURL(storageRootURL: storageRootURL),
+                                   let pageIndex = slide.pdfPageIndex {
+                                    SlideThumbnailView(
+                                        pdfURL: pdfURL,
+                                        pageIndex: pageIndex,
+                                        aspectRatio: slide.aspectRatio,
+                                        targetWidth: 112
+                                    )
+                                }
+                                Text(slide.slideTitle)
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: 112, alignment: .leading)
+                            }
+                            .accessibilityIdentifier("reviewSnapshottedSlide_\(slide.slideIndex)")
+                        }
+                    }
+                }
+            }
 
             if let exactPhrase = section.exactPhrase,
                !exactPhrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

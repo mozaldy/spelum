@@ -52,23 +52,6 @@ enum SectionPurpose: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum PresentationImportError: LocalizedError, Equatable, Sendable {
-    case emptyScript
-    case unreadableFile
-    case invalidUTF8
-
-    var errorDescription: String? {
-        switch self {
-        case .emptyScript:
-            "The script is empty. Paste or import non-empty UTF-8 text."
-        case .unreadableFile:
-            "The selected file could not be read."
-        case .invalidUTF8:
-            "The selected file is not valid UTF-8 plain text."
-        }
-    }
-}
-
 enum SectionEditError: LocalizedError, Equatable, Sendable {
     case presentationNotFound
     case sectionNotFound
@@ -267,6 +250,8 @@ final class TalkRevisionRecord {
     var revisionNumber: Int
     var title: String
     var changeSummary: String
+    var slideDeckRelativePath: String?
+    var slideDeckPageCount: Int?
     var createdAt: Date
     var presentation: PresentationRecord?
 
@@ -278,6 +263,8 @@ final class TalkRevisionRecord {
         revisionNumber: Int,
         title: String,
         changeSummary: String,
+        slideDeckRelativePath: String? = nil,
+        slideDeckPageCount: Int? = nil,
         createdAt: Date = Date(),
         presentation: PresentationRecord? = nil
     ) {
@@ -285,6 +272,8 @@ final class TalkRevisionRecord {
         self.revisionNumber = revisionNumber
         self.title = title
         self.changeSummary = changeSummary
+        self.slideDeckRelativePath = slideDeckRelativePath
+        self.slideDeckPageCount = slideDeckPageCount
         self.createdAt = createdAt
         self.presentation = presentation
         self.entries = []
@@ -331,6 +320,7 @@ final class SectionRevisionRecord {
     var handoffCueOverride: String?
     var handoffCueSourceSectionID: UUID?
     var handoffCueIsOpening: Bool?
+    var slideAssignmentsData: Data?
     var createdAt: Date
     var presentation: PresentationRecord?
 
@@ -347,6 +337,7 @@ final class SectionRevisionRecord {
         handoffCueOverride: String? = nil,
         handoffCueSourceSectionID: UUID? = nil,
         handoffCueIsOpening: Bool? = nil,
+        slideReferences: [SectionSlideReference] = [],
         createdAt: Date = Date(),
         presentation: PresentationRecord? = nil
     ) {
@@ -362,6 +353,7 @@ final class SectionRevisionRecord {
         self.handoffCueOverride = handoffCueOverride
         self.handoffCueSourceSectionID = handoffCueSourceSectionID
         self.handoffCueIsOpening = handoffCueIsOpening
+        self.slideAssignmentsData = Self.encodeSlideReferences(slideReferences)
         self.createdAt = createdAt
         self.presentation = presentation
     }
@@ -378,7 +370,17 @@ final class SectionRevisionRecord {
         (try? JSONDecoder().decode([String].self, from: cueWordsData)) ?? []
     }
 
+    var slideReferences: [SectionSlideReference] {
+        guard let slideAssignmentsData else { return [] }
+        return (try? JSONDecoder().decode([SectionSlideReference].self, from: slideAssignmentsData)) ?? []
+    }
+
     private static func encodeCueWords(_ words: [String]) -> Data {
         (try? JSONEncoder().encode(words)) ?? Data()
+    }
+
+    private static func encodeSlideReferences(_ references: [SectionSlideReference]) -> Data? {
+        guard !references.isEmpty else { return nil }
+        return try? JSONEncoder().encode(references)
     }
 }

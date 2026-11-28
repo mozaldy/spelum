@@ -13,6 +13,10 @@ extension PresentationStore {
     }
 
     static func defaultTitle(fromText text: String, fallback: String = "Untitled Presentation") -> String {
+        let parsed = AnnotatedScriptParser.parseDocument(text)
+        if parsed.hasStructuredHeadings {
+            return parsed.defaultPresentationTitle
+        }
         var firstNonEmpty: String?
         text.enumerateLines { line, stop in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,6 +34,9 @@ extension PresentationStore {
     }
 
     static func displaySnippet(for text: String) -> String {
+        if let firstSpoken = AnnotatedScriptParser.firstSpokenLine(in: text), !firstSpoken.isEmpty {
+            return firstSpoken
+        }
         var firstNonEmpty: String?
         text.enumerateLines { line, stop in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)

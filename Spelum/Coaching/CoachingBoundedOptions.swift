@@ -256,7 +256,9 @@ nonisolated enum CoachingPassageExtractor {
     ) -> Bool {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              !containsStageDirectionBrackets(trimmed) else {
+              !containsStageDirectionBrackets(trimmed),
+              !AnnotatedScriptParser.isSectionHeading(trimmed),
+              !AnnotatedScriptParser.isSlideHeading(trimmed) else {
             return false
         }
         let words = normalizedWords(in: trimmed)
@@ -311,14 +313,37 @@ nonisolated enum CoachingPassageExtractor {
 
     private static func splitOutsideStageDirections(in text: String) -> [String] {
         var segments: [String] = []
-        var current = ""
         var bracketDepth = 0
 
-        for char in text {
+        for rawLine in AnnotatedScriptParser.splitPreservingLineEndings(text) {
+            let trimmedLine = rawLine.content.trimmingCharacters(in: .whitespaces)
+            if bracketDepth == 0,
+               AnnotatedScriptParser.isSectionHeading(trimmedLine)
+                || AnnotatedScriptParser.isSlideHeading(trimmedLine) {
+                continue
+            }
+
+            for piece in extractLineSegmentsOutsideBrackets(rawLine.content, bracketDepth: &bracketDepth) {
+                let parsed = AnnotatedScriptInlineParser.parseLine(piece, startingBlockID: 0)
+                if let spoken = parsed.spokenLine, !spoken.isEmpty {
+                    segments.append(spoken)
+                }
+            }
+        }
+        return segments
+    }
+
+    private static func extractLineSegmentsOutsideBrackets(
+        _ line: String,
+        bracketDepth: inout Int
+    ) -> [String] {
+        var pieces: [String] = []
+        var current = ""
+        for char in line {
             if char == "[" {
                 if bracketDepth == 0 {
                     let cleaned = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !cleaned.isEmpty { segments.append(cleaned) }
+                    if !cleaned.isEmpty { pieces.append(cleaned) }
                     current = ""
                 }
                 bracketDepth += 1
@@ -328,8 +353,8 @@ nonisolated enum CoachingPassageExtractor {
                 current.append(char)
             }
         }
-        let cleaned = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleaned.isEmpty { segments.append(cleaned) }
-        return segments
+        let trailing = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trailing.isEmpty { pieces.append(trailing) }
+        return pieces
     }
 }

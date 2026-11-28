@@ -155,41 +155,93 @@ struct PracticeHandoffCueCard: View {
 
 struct PracticePromptCard: View {
     let section: SectionRevisionRecord
+    let slides: [ResolvedRehearsalSlide]
+    let activeSlideIndex: Int
+    let sectionPositionLabel: String?
     let practiceMode: PracticeMode
     let isScriptRevealed: Bool
     let revealCount: Int
     let isActiveTake: Bool
+    let isAccessibilitySize: Bool
+    let storageRootURL: URL
+    let onSelectSlideIndex: ((Int) -> Void)?
     let onToggleReveal: () -> Void
+
+    init(
+        section: SectionRevisionRecord,
+        slides: [ResolvedRehearsalSlide]? = nil,
+        activeSlideIndex: Int = 0,
+        sectionPositionLabel: String? = nil,
+        practiceMode: PracticeMode,
+        isScriptRevealed: Bool,
+        revealCount: Int,
+        isActiveTake: Bool,
+        isAccessibilitySize: Bool = false,
+        storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL(),
+        onSelectSlideIndex: ((Int) -> Void)? = nil,
+        onToggleReveal: @escaping () -> Void
+    ) {
+        self.section = section
+        self.slides = slides ?? RehearsalSlideResolver.resolveSlides(for: section)
+        self.activeSlideIndex = activeSlideIndex
+        self.sectionPositionLabel = sectionPositionLabel
+        self.practiceMode = practiceMode
+        self.isScriptRevealed = isScriptRevealed
+        self.revealCount = revealCount
+        self.isActiveTake = isActiveTake
+        self.isAccessibilitySize = isAccessibilitySize
+        self.storageRootURL = storageRootURL
+        self.onSelectSlideIndex = onSelectSlideIndex
+        self.onToggleReveal = onToggleReveal
+    }
+
+    private var clampedSlideIndex: Int {
+        guard !slides.isEmpty else { return 0 }
+        return min(max(activeSlideIndex, 0), slides.count - 1)
+    }
+
+    var rehearsalView: AnnotatedSlideRehearsalView {
+        AnnotatedSlideRehearsalView(
+            slides: slides,
+            activeSlideIndex: clampedSlideIndex,
+            sectionPositionLabel: sectionPositionLabel,
+            sectionTitle: section.title,
+            exactPhrase: section.exactPhrase,
+            cueWords: section.cueWords,
+            practiceMode: practiceMode,
+            isScriptRevealed: isScriptRevealed,
+            revealCount: revealCount,
+            isActiveTake: isActiveTake,
+            isAccessibilitySize: isAccessibilitySize,
+            theme: .standard,
+            storageRootURL: storageRootURL,
+            fillsAvailableHeight: false,
+            scriptScrollMaxHeight: 340,
+            scriptAccessibilityIdentifier: "practiceRevealedScriptText",
+            revealButtonAccessibilityIdentifier: "revealScriptButton",
+            canGoPrevious: clampedSlideIndex > 0,
+            previousButtonLabel: "Previous Slide",
+            onPrevious: slides.count > 1 && onSelectSlideIndex != nil
+                ? { onSelectSlideIndex?(clampedSlideIndex - 1) }
+                : nil,
+            canGoNext: clampedSlideIndex + 1 < slides.count,
+            nextButtonLabel: "Next Slide",
+            onNext: slides.count > 1 && onSelectSlideIndex != nil
+                ? { onSelectSlideIndex?(clampedSlideIndex + 1) }
+                : nil,
+            onSelectSlideIndex: onSelectSlideIndex,
+            onToggleReveal: onToggleReveal
+        )
+    }
+
+    var visiblePromptState: RehearsalVisiblePromptState {
+        rehearsalView.visiblePromptState
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
-
-            switch practiceMode {
-            case .fullScript:
-                exactPhraseBlock
-                scriptBodyText
-                cueWordsBlock
-            case .cueWords:
-                exactPhraseBlock
-                cueWordsBlockOrEmpty
-                if isScriptRevealed {
-                    Divider()
-                    scriptBodyText
-                }
-            case .memory:
-                if isScriptRevealed {
-                    exactPhraseBlock
-                    scriptBodyText
-                    cueWordsBlock
-                } else {
-                    memoryHiddenPrompt
-                }
-            }
-
-            if practiceMode.supportsReveal {
-                revealControlButton
-            }
+            rehearsalView
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -209,96 +261,6 @@ struct PracticePromptCard: View {
                     .accessibilityIdentifier("practiceRevealCountLabel")
             }
         }
-    }
-
-    @ViewBuilder
-    private var exactPhraseBlock: some View {
-        if let exactPhrase = section.exactPhrase,
-           !exactPhrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Exact Phrase", systemImage: "quote.opening")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tint)
-                Text(exactPhrase)
-                    .font(.body.weight(.medium))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    @ViewBuilder
-    private var cueWordsBlock: some View {
-        if !section.cueWords.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Cue Words", systemImage: "tag")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(Array(section.cueWords.enumerated()), id: \.offset) { _, word in
-                    Text("• \(word)")
-                        .font(.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var cueWordsBlockOrEmpty: some View {
-        if section.cueWords.isEmpty {
-            Text("No cue words saved for this section yet. Reveal the script below if you need a prompt.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            cueWordsBlock
-        }
-    }
-
-    private var scriptBodyText: some View {
-        Text(section.text)
-            .font(.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("practiceRevealedScriptText")
-    }
-
-    private var memoryHiddenPrompt: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Script Hidden for Recall", systemImage: "eye.slash")
-                .font(.headline)
-            Text(
-                "Read the handoff cue above, then deliver this section from memory. " +
-                "Tap Reveal Script if you get stuck."
-            )
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("memoryHiddenPrompt")
-    }
-
-    private var revealControlButton: some View {
-        Button(action: onToggleReveal) {
-            Label(
-                isScriptRevealed ? "Hide Script" : "Reveal Script",
-                systemImage: isScriptRevealed ? "eye.slash" : "eye"
-            )
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(.bordered)
-        .accessibilityLabel(isScriptRevealed ? "Hide Script" : "Reveal Script")
-        .accessibilityValue(revealCount == 1 ? "1 reveal" : "\(revealCount) reveals")
-        .accessibilityHint(
-            isScriptRevealed
-                ? "Hides the full script again."
-                : "Shows the full section script and counts one reveal during an active take."
-        )
-        .accessibilityIdentifier("revealScriptButton")
     }
 }
 

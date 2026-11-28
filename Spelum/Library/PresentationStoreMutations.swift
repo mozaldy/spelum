@@ -28,11 +28,19 @@ extension PresentationStore {
 
         return try performAtomicWrite {
             let now = Date()
+            let updatedSlideRefs = Self.reconcileSlideReferences(
+                existing: existing.slideReferences,
+                editedText: draft.text,
+                sectionTitle: draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? existing.title
+                    : draft.title
+            )
             let newSectionRevision = makeSectionRevision(
                 from: draft,
                 sectionID: existing.sectionID,
                 fallbackTitle: existing.title,
                 handoffOrigin: origin,
+                slideReferences: updatedSlideRefs,
                 timestamp: now,
                 presentation: presentation
             )
@@ -232,10 +240,12 @@ extension PresentationStore {
 
     func deletePresentation(_ presentation: PresentationRecord) throws {
         let presentationID = presentation.id
+        let candidateDeckPaths = collectDeckPaths(for: presentation)
         try performAtomicWrite {
             try CoachingStore(modelContext: modelContext).deleteCues(forPresentationID: presentationID)
             modelContext.delete(presentation)
         }
+        removeUnreferencedDeckFiles(candidates: candidateDeckPaths)
     }
 }
 
@@ -270,6 +280,13 @@ private extension PresentationStore {
             secondText: splitTexts.1
         )
         let nextTitle = "Section \(nextSectionNumber)"
+        let (firstSlides, secondSlides) = Self.partitionSlideReferences(
+            existing.slideReferences,
+            firstText: splitTexts.0,
+            secondText: splitTexts.1,
+            firstTitle: base.title.isEmpty ? existing.title : base.title,
+            secondTitle: nextTitle
+        )
         let firstDraft = SectionDraft(
             title: base.title,
             text: splitTexts.0,
@@ -295,6 +312,7 @@ private extension PresentationStore {
             sectionID: existing.sectionID,
             fallbackTitle: existing.title,
             handoffOrigin: firstOrigin,
+            slideReferences: firstSlides,
             timestamp: timestamp,
             presentation: presentation
         )
@@ -303,6 +321,7 @@ private extension PresentationStore {
             sectionID: UUID(),
             fallbackTitle: nextTitle,
             handoffOrigin: .fromSection(first.sectionID),
+            slideReferences: secondSlides,
             timestamp: timestamp,
             presentation: presentation
         )
@@ -322,6 +341,7 @@ private extension PresentationStore {
         sectionID: UUID,
         fallbackTitle: String,
         handoffOrigin: HandoffTransitionOrigin,
+        slideReferences: [SectionSlideReference],
         timestamp: Date,
         presentation: PresentationRecord?
     ) -> SectionRevisionRecord {
@@ -360,41 +380,9 @@ private extension PresentationStore {
             handoffCueOverride: normalizedOverride,
             handoffCueSourceSectionID: sourceSectionID,
             handoffCueIsOpening: isOpening,
+            slideReferences: slideReferences,
             createdAt: timestamp,
             presentation: presentation
         )
-    }
-
-    func appendTalkRevision(
-        to presentation: PresentationRecord,
-        previousRevision: TalkRevisionRecord,
-        orderedSections: [SectionRevisionRecord],
-        changeSummary: String,
-        timestamp: Date = Date()
-    ) -> TalkRevisionRecord {
-        let newRevision = TalkRevisionRecord(
-            revisionNumber: previousRevision.revisionNumber + 1,
-            title: presentation.title,
-            changeSummary: changeSummary,
-            createdAt: timestamp,
-            presentation: presentation
-        )
-        modelContext.insert(newRevision)
-
-        for (index, section) in orderedSections.enumerated() {
-            let entry = TalkRevisionEntryRecord(
-                orderIndex: index,
-                sectionRevisionID: section.revisionID,
-                talkRevision: newRevision,
-                sectionRevision: section
-            )
-            newRevision.entries.append(entry)
-            modelContext.insert(entry)
-        }
-
-        presentation.talkRevisions.append(newRevision)
-        presentation.currentRevisionID = newRevision.id
-        presentation.updatedAt = timestamp
-        return newRevision
     }
 }

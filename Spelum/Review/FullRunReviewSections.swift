@@ -233,6 +233,15 @@ struct FullRunReviewTimelineCard: View {
 
 struct FullRunReviewScriptCard: View {
     let snapshot: FullRunSnapshot
+    let storageRootURL: URL
+
+    init(
+        snapshot: FullRunSnapshot,
+        storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL()
+    ) {
+        self.snapshot = snapshot
+        self.storageRootURL = storageRootURL
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -252,8 +261,32 @@ struct FullRunReviewScriptCard: View {
             .fixedSize(horizontal: false, vertical: true)
 
             ForEach(snapshot.sections) { section in
+                let slides = RehearsalSlideResolver.resolveSlides(for: section)
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
+                        if slides.contains(where: \.hasSlideArtwork) || slides.count > 1 {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(slides) { slide in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            if let pdfURL = slide.resolvedDeckURL(storageRootURL: storageRootURL),
+                                               let pageIndex = slide.pdfPageIndex {
+                                                SlideThumbnailView(
+                                                    pdfURL: pdfURL,
+                                                    pageIndex: pageIndex,
+                                                    aspectRatio: slide.aspectRatio,
+                                                    targetWidth: 104
+                                                )
+                                            }
+                                            Text(slide.slideTitle)
+                                                .font(.caption.weight(.medium))
+                                                .lineLimit(1)
+                                                .frame(maxWidth: 104, alignment: .leading)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let handoff = section.handoffCueText, !handoff.isEmpty {
                             Text("Handoff cue: “\(handoff)”")
                                 .font(.caption)

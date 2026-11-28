@@ -46,24 +46,49 @@ extension FullRunView {
                     onSelectMode: { session.selectPracticeMode($0) }
                 )
 
-                if let activeSection = session.currentFullRunSection {
-                    FullRunStageCard(
-                        section: activeSection,
-                        totalInRun: snapshot.sections.count,
-                        practiceMode: session.practiceMode,
-                        isScriptRevealed: session.isScriptRevealed,
-                        revealCount: session.revealCount,
-                        isActiveTake: session.isActiveTake,
-                        isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                        onToggleReveal: { session.toggleReveal() }
-                    )
-                }
+                fullRunStageSection(session: session, snapshot: snapshot)
 
                 captureAndHistoryCards(session: session)
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private func fullRunStageSection(
+        session: RecordingSession,
+        snapshot: FullRunSnapshot
+    ) -> some View {
+        if let activeSection = session.currentFullRunSection {
+            let hasStepNav = session.currentFullRunSlides.count > 1 || snapshot.sections.count > 1
+            FullRunStageCard(
+                section: activeSection,
+                slides: session.currentFullRunSlides,
+                activeSlideIndex: session.currentFullRunSlideIndex,
+                totalInRun: snapshot.sections.count,
+                practiceMode: session.practiceMode,
+                isScriptRevealed: session.isScriptRevealed,
+                revealCount: session.revealCount,
+                isActiveTake: session.isActiveTake,
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                storageRootURL: session.attemptStore.storageRootURL,
+                canGoPrevious: session.canRetreatFullRunStep,
+                previousButtonLabel: session.hasPreviousSlideInCurrentSection
+                    ? "Previous Slide"
+                    : "Previous Section",
+                onPrevious: hasStepNav ? { _ = session.retreatFullRunStep() } : nil,
+                canGoNext: session.canAdvanceFullRunStep,
+                nextButtonLabel: session.hasNextSlideInCurrentSection
+                    ? "Next Slide"
+                    : "Next Section",
+                onNext: hasStepNav ? { _ = session.advanceFullRunStep() } : nil,
+                onSelectSlideIndex: session.currentFullRunSlides.count > 1
+                    ? { session.selectFullRunSlide(index: $0) }
+                    : nil,
+                onToggleReveal: { session.toggleReveal() }
+            )
+        }
     }
 
     @ViewBuilder

@@ -88,6 +88,8 @@ struct FullRunGlowingBlueBackground: View {
 }
 
 struct FullRunFullscreenStageView: View {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
     let session: RecordingSession
     let snapshot: FullRunSnapshot
     let isAccessibilitySize: Bool
@@ -95,6 +97,10 @@ struct FullRunFullscreenStageView: View {
 
     private var activeSection: FullRunSectionSnapshot? {
         session.currentFullRunSection ?? snapshot.sections.first
+    }
+
+    private var usesStageScroll: Bool {
+        isAccessibilitySize || verticalSizeClass == .compact
     }
 
     var body: some View {
@@ -107,13 +113,12 @@ struct FullRunFullscreenStageView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 12)
 
-                scriptScrollStage
-
-                FullRunFullscreenControlsDock(
-                    session: session,
-                    isAccessibilitySize: isAccessibilitySize,
-                    onExitFullscreen: onExitFullscreen
-                )
+                if usesStageScroll {
+                    scrollableStage
+                } else {
+                    scriptScrollStage
+                    controlsDock
+                }
             }
         }
         .environment(\.colorScheme, .dark)
@@ -200,11 +205,19 @@ struct FullRunFullscreenStageView: View {
 
     private var progressBadge: some View {
         let current = min(max(session.currentFullRunSectionIndex + 1, 1), max(snapshot.sections.count, 1))
-        return Text("\(current)/\(snapshot.sections.count)")
+        let slideCount = session.currentFullRunSlides.count
+        let slideNum = min(max(session.currentFullRunSlideIndex + 1, 1), max(slideCount, 1))
+        let labelText = slideCount > 1
+            ? "Sec \(current)/\(snapshot.sections.count) · Slide \(slideNum)/\(slideCount)"
+            : "\(current)/\(snapshot.sections.count)"
+        let accessibleLabel = slideCount > 1
+            ? "Section \(current) of \(snapshot.sections.count), Slide \(slideNum) of \(slideCount)"
+            : "Section \(current) of \(snapshot.sections.count)"
+        return Text(labelText)
             .font(.subheadline.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.white.opacity(0.86))
-            .accessibilityLabel("Section \(current) of \(snapshot.sections.count)")
+            .accessibilityLabel(accessibleLabel)
             .accessibilityIdentifier("fullRunFullscreenProgressLabel")
     }
 
@@ -235,34 +248,74 @@ struct FullRunFullscreenStageView: View {
         .accessibilityIdentifier("fullRunExitFullscreenButton")
     }
 
-    private var scriptScrollStage: some View {
+    var fullscreenScriptContent: FullRunFullscreenScriptContent? {
+        guard let section = activeSection else { return nil }
+        let hasStepNav = session.currentFullRunSlides.count > 1 || snapshot.sections.count > 1
+        return FullRunFullscreenScriptContent(
+            section: section,
+            slides: session.currentFullRunSlides,
+            activeSlideIndex: session.currentFullRunSlideIndex,
+            totalInRun: snapshot.sections.count,
+            practiceMode: session.practiceMode,
+            isScriptRevealed: session.isScriptRevealed,
+            revealCount: session.revealCount,
+            isActiveTake: session.isActiveTake,
+            isAccessibilitySize: isAccessibilitySize,
+            usesStageScroll: usesStageScroll,
+            storageRootURL: session.attemptStore.storageRootURL,
+            canGoPrevious: session.canRetreatFullRunStep,
+            previousButtonLabel: session.hasPreviousSlideInCurrentSection
+                ? "Previous Slide"
+                : "Previous Section",
+            onPrevious: hasStepNav ? { _ = session.retreatFullRunStep() } : nil,
+            canGoNext: session.canAdvanceFullRunStep,
+            nextButtonLabel: session.hasNextSlideInCurrentSection
+                ? "Next Slide"
+                : "Next Section",
+            onNext: hasStepNav ? { _ = session.advanceFullRunStep() } : nil,
+            onSelectSlideIndex: session.currentFullRunSlides.count > 1
+                ? { session.selectFullRunSlide(index: $0) }
+                : nil,
+            onToggleReveal: { session.toggleReveal() }
+        )
+    }
+
+    var visiblePromptState: RehearsalVisiblePromptState? {
+        fullscreenScriptContent?.visiblePromptState
+    }
+
+    private var scrollableStage: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Color.clear
-                        .frame(height: 0)
-                        .id("fullRunFullscreenScriptTop")
-
-                    if let section = activeSection {
-                        FullRunFullscreenScriptContent(
-                            section: section,
-                            practiceMode: session.practiceMode,
-                            isScriptRevealed: session.isScriptRevealed,
-                            revealCount: session.revealCount,
-                            isAccessibilitySize: isAccessibilitySize,
-                            onToggleReveal: { session.toggleReveal() }
-                        )
-                    }
+                VStack(spacing: 0) {
+                    scriptScrollStage
+                        .id("fullscreenScriptStart")
+                    controlsDock
                 }
-                .padding(.horizontal, 22)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
             }
-            .scrollIndicators(.visible)
-            .onChange(of: activeSection?.id) { _, _ in
-                proxy.scrollTo("fullRunFullscreenScriptTop", anchor: .top)
+            .onChange(of: session.currentFullRunSlide?.id) { _, _ in
+                proxy.scrollTo("fullscreenScriptStart", anchor: .top)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var controlsDock: some View {
+        FullRunFullscreenControlsDock(
+            session: session,
+            isAccessibilitySize: isAccessibilitySize,
+            onExitFullscreen: onExitFullscreen
+        )
+    }
+
+    private var scriptScrollStage: some View {
+        Group {
+            if let content = fullscreenScriptContent {
+                content
+                    .padding(.horizontal, 20)
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

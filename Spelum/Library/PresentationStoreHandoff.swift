@@ -49,7 +49,7 @@ extension PresentationStore {
         }
 
         let preceding = sections[index - 1]
-        let derivedLine = Self.finalNonEmptyLine(in: preceding.text)
+        let derivedLine = AnnotatedScriptParser.lastSpokenLine(in: preceding.text)
         let isSpeakerChange = Self.normalizedSpeakerKey(preceding) != Self.normalizedSpeakerKey(current)
 
         return HandoffContext(
@@ -128,6 +128,7 @@ extension PresentationStore {
             handoffCueOverride: customCue,
             handoffCueSourceSectionID: newPredecessorID,
             handoffCueIsOpening: false,
+            slideReferences: follower.slideReferences,
             createdAt: timestamp,
             presentation: presentation
         )
@@ -166,6 +167,7 @@ extension PresentationStore {
                 handoffCueOverride: nil,
                 handoffCueSourceSectionID: nil,
                 handoffCueIsOpening: nil,
+                slideReferences: section.slideReferences,
                 createdAt: timestamp,
                 presentation: presentation
             )

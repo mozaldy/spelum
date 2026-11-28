@@ -291,3 +291,57 @@ struct ScriptEditorDetailsSection: View {
         }
     }
 }
+
+struct ScriptEditorSlidesSection: View {
+    let slides: [ResolvedRehearsalSlide]
+    let storageRootURL: URL
+    let onPracticeFromSlide: (Int) -> Void
+
+    var body: some View {
+        Section {
+            ForEach(slides) { slide in
+                HStack(spacing: 12) {
+                    if let pdfURL = slide.resolvedDeckURL(storageRootURL: storageRootURL),
+                       let pageIndex = slide.pdfPageIndex {
+                        SlideThumbnailView(
+                            pdfURL: pdfURL,
+                            pageIndex: pageIndex,
+                            aspectRatio: slide.aspectRatio,
+                            targetWidth: 60
+                        )
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(slide.slideTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                        Text(slideSubtitle(for: slide))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        onPracticeFromSlide(slide.slideIndex)
+                    } label: {
+                        Label("Practice", systemImage: "play.fill")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Practice from \(slide.slideTitle)")
+                    .accessibilityIdentifier("practiceFromSlideButton_\(slide.slideIndex)")
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            Text("Slides in Section (\(slides.count))")
+        } footer: {
+            Text("Start offline practice at any slide in this section while preserving your verbatim script.")
+        }
+    }
+
+    private func slideSubtitle(for slide: ResolvedRehearsalSlide) -> String {
+        if let pageIndex = slide.pdfPageIndex {
+            return "\(slide.positionLabel) · PDF Page \(pageIndex + 1)"
+        }
+        return slide.positionLabel
+    }
+}

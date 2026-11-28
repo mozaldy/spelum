@@ -2,34 +2,6 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-struct PracticeTarget: Hashable, Sendable {
-    let presentationID: UUID
-    let sectionID: UUID
-    let talkRevisionID: UUID?
-    let sectionRevisionID: UUID?
-    let initialMode: PracticeMode
-    let hasUnsavedEditorDraft: Bool
-    let retryToken: UUID
-
-    init(
-        presentationID: UUID,
-        sectionID: UUID,
-        talkRevisionID: UUID? = nil,
-        sectionRevisionID: UUID? = nil,
-        initialMode: PracticeMode = .cueWords,
-        hasUnsavedEditorDraft: Bool = false,
-        retryToken: UUID = UUID()
-    ) {
-        self.presentationID = presentationID
-        self.sectionID = sectionID
-        self.talkRevisionID = talkRevisionID
-        self.sectionRevisionID = sectionRevisionID
-        self.initialMode = initialMode
-        self.hasUnsavedEditorDraft = hasUnsavedEditorDraft
-        self.retryToken = retryToken
-    }
-}
-
 struct PracticeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -47,6 +19,7 @@ struct PracticeView: View {
     @State private var coachCoordinator: PreparationCoachCoordinator?
     @State private var pinnedTalkRevisionID: UUID?
     @State private var pinnedSectionRevisionID: UUID?
+    @State private var activeSlideIndex = 0
     @State private var lastAutoOpenedAttemptID: UUID?
     @State private var attemptPendingDelete: AttemptRecord?
     @State private var showingDiscardFailedConfirm = false
@@ -219,12 +192,23 @@ struct PracticeView: View {
                     PracticeHandoffCueCard(handoff: handoff)
                 }
 
+                let sectionSlides = RehearsalSlideResolver.resolveSlides(for: section)
                 PracticePromptCard(
                     section: section,
+                    slides: sectionSlides,
+                    activeSlideIndex: activeSlideIndex,
+                    sectionPositionLabel: sectionPositionLabel(for: section, in: talkRevision),
                     practiceMode: session.practiceMode,
                     isScriptRevealed: session.isScriptRevealed,
                     revealCount: session.revealCount,
                     isActiveTake: session.isActiveTake,
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                    storageRootURL: presentationStore.storageRootURL,
+                    onSelectSlideIndex: { newIndex in
+                        let clamped = min(max(newIndex, 0), max(sectionSlides.count - 1, 0))
+                        activeSlideIndex = clamped
+                        session.hideScript()
+                    },
                     onToggleReveal: { session.toggleReveal() }
                 )
 
@@ -344,6 +328,8 @@ private extension PracticeView {
 
         pinnedTalkRevisionID = talkRevision.id
         pinnedSectionRevisionID = section.revisionID
+        let slidesCount = RehearsalSlideResolver.resolveSlides(for: section).count
+        activeSlideIndex = min(max(target.initialSlideIndex, 0), max(slidesCount - 1, 0))
         lastAutoOpenedAttemptID = nil
 
         let snapshot = AttemptSnapshotReference(
@@ -391,5 +377,17 @@ private extension PracticeView {
         } catch {
             historyErrorMessage = error.localizedDescription
         }
+    }
+
+    func sectionPositionLabel(
+        for section: SectionRevisionRecord,
+        in talkRevision: TalkRevisionRecord
+    ) -> String? {
+        let ordered = presentationStore.orderedSections(in: talkRevision)
+        guard ordered.count > 1,
+              let index = ordered.firstIndex(where: { $0.sectionID == section.sectionID }) else {
+            return nil
+        }
+        return "Section \(index + 1) of \(ordered.count)"
     }
 }
