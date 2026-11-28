@@ -5,7 +5,7 @@ import Testing
 import UIKit
 @testable import Spelum
 
-@Suite("Full Run Fullscreen Stage Mode & Accessibility")
+@Suite("Full Run Fullscreen Stage Mode & Accessibility", .serialized)
 @MainActor
 struct FullRunFullscreenStageTests {
     private struct StageAppearance {
@@ -117,6 +117,49 @@ struct FullRunFullscreenStageTests {
         )
     }
 
+    @Test("Portrait fullscreen stage dedicates majority of screen height to the script with paired PDF slides")
+    func portraitStagePrioritizesScriptViewport() throws {
+        let workspace = try PracticeTestWorkspace.create(prefix: "FullscreenScriptFocus")
+        defer { workspace.cleanup() }
+        let container = try PresentationStore.makeModelContainer(storeURL: workspace.storeURL)
+        let context = container.mainContext
+        let library = PresentationStore(modelContext: context, storageRootURL: workspace.storageRoot)
+        let attempts = AttemptStore(modelContext: context, storageRootURL: workspace.storageRoot)
+        let seeded = try AnnotatedSlideRehearsalTests.seedTwoSectionFiveSlideTalk(in: library, workspace: workspace)
+        let session = FullRunTestFixtures.makeSession(
+            attemptStore: attempts,
+            snapshot: seeded.snapshot,
+            initialMode: .fullScript,
+            recorder: SteppableFullRunRecorder()
+        )
+        session.startSilentRecall()
+
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        let stage = FullRunFullscreenStageView(
+            session: session,
+            snapshot: seeded.snapshot,
+            isAccessibilitySize: false,
+            onExitFullscreen: {}
+        )
+        .environment(\.dynamicTypeSize, .large)
+        .environment(\.verticalSizeClass, .regular)
+        let host = UIHostingController(rootView: stage)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.rootViewController = nil
+            window.isHidden = true
+            _ = session.finishFullRunEarly()
+        }
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.06))
+
+        let scrollView = try #require(firstScrollView(in: host.view))
+        #expect(scrollView.bounds.height > host.view.bounds.height * 0.55)
+    }
+
     private func assertStageScrollsPastScript(
         size: CGSize,
         dynamicTypeSize: DynamicTypeSize,
@@ -148,7 +191,10 @@ struct FullRunFullscreenStageTests {
         let host = UIHostingController(rootView: stage)
         window.rootViewController = host
         window.makeKeyAndVisible()
-        defer { window.isHidden = true }
+        defer {
+            window.rootViewController = nil
+            window.isHidden = true
+        }
         host.view.frame = CGRect(origin: .zero, size: size)
         host.view.layoutIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.06))

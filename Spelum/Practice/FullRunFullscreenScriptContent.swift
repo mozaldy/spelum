@@ -11,14 +11,8 @@ struct FullRunFullscreenScriptContent: View {
     let isActiveTake: Bool
     let isAccessibilitySize: Bool
     let usesStageScroll: Bool
+    let showsSlidePreview: Bool
     let storageRootURL: URL
-    let canGoPrevious: Bool
-    let previousButtonLabel: String
-    let onPrevious: (() -> Void)?
-    let canGoNext: Bool
-    let nextButtonLabel: String
-    let onNext: (() -> Void)?
-    let onSelectSlideIndex: ((Int) -> Void)?
     let onToggleReveal: () -> Void
 
     init(
@@ -32,14 +26,8 @@ struct FullRunFullscreenScriptContent: View {
         isActiveTake: Bool = false,
         isAccessibilitySize: Bool,
         usesStageScroll: Bool,
+        showsSlidePreview: Bool = true,
         storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL(),
-        canGoPrevious: Bool = false,
-        previousButtonLabel: String = "Previous",
-        onPrevious: (() -> Void)? = nil,
-        canGoNext: Bool = false,
-        nextButtonLabel: String = "Next",
-        onNext: (() -> Void)? = nil,
-        onSelectSlideIndex: ((Int) -> Void)? = nil,
         onToggleReveal: @escaping () -> Void
     ) {
         self.section = section
@@ -52,14 +40,8 @@ struct FullRunFullscreenScriptContent: View {
         self.isActiveTake = isActiveTake
         self.isAccessibilitySize = isAccessibilitySize
         self.usesStageScroll = usesStageScroll
+        self.showsSlidePreview = showsSlidePreview
         self.storageRootURL = storageRootURL
-        self.canGoPrevious = canGoPrevious
-        self.previousButtonLabel = previousButtonLabel
-        self.onPrevious = onPrevious
-        self.canGoNext = canGoNext
-        self.nextButtonLabel = nextButtonLabel
-        self.onNext = onNext
-        self.onSelectSlideIndex = onSelectSlideIndex
         self.onToggleReveal = onToggleReveal
     }
 
@@ -77,18 +59,12 @@ struct FullRunFullscreenScriptContent: View {
             isActiveTake: isActiveTake,
             isAccessibilitySize: isAccessibilitySize,
             theme: .fullscreenStage,
+            chrome: .scriptOnly,
             storageRootURL: storageRootURL,
             fillsAvailableHeight: !usesStageScroll,
             scriptScrollMaxHeight: nil,
             scriptAccessibilityIdentifier: "fullRunFullscreenScriptText",
             revealButtonAccessibilityIdentifier: "fullRunFullscreenRevealButton",
-            canGoPrevious: canGoPrevious,
-            previousButtonLabel: previousButtonLabel,
-            onPrevious: onPrevious,
-            canGoNext: canGoNext,
-            nextButtonLabel: nextButtonLabel,
-            onNext: onNext,
-            onSelectSlideIndex: onSelectSlideIndex,
             onToggleReveal: onToggleReveal
         )
     }
@@ -97,9 +73,14 @@ struct FullRunFullscreenScriptContent: View {
         rehearsalView.visiblePromptState
     }
 
+    private var activeSlide: ResolvedRehearsalSlide? {
+        rehearsalView.activeSlide
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitleHeader
+        let promptState = visiblePromptState
+        VStack(alignment: .leading, spacing: 10) {
+            compactHeader(promptState: promptState)
 
             if let handoffCue = section.handoffCueText, !handoffCue.isEmpty {
                 handoffCueCard(cue: handoffCue)
@@ -107,11 +88,11 @@ struct FullRunFullscreenScriptContent: View {
 
             if section.purpose == .demonstration {
                 Label(
-                    "Demonstration — intentional silence stays in the continuous recording timeline.",
+                    "Demonstration — intentional silence stays in the recording.",
                     systemImage: "play.display"
                 )
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.84))
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.78))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("fullRunFullscreenSilentDemoNote")
             }
@@ -123,28 +104,107 @@ struct FullRunFullscreenScriptContent: View {
         .accessibilityIdentifier("fullRunFullscreenScriptContent")
     }
 
-    private var sectionTitleHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    @ViewBuilder
+    private func compactHeader(promptState: RehearsalVisiblePromptState) -> some View {
+        if showsSlidePreview,
+           let slide = activeSlide,
+           let pdfURL = slide.resolvedDeckURL(storageRootURL: storageRootURL),
+           let pageIndex = slide.pdfPageIndex {
+            slideThumbnailHeader(
+                slide: slide,
+                pdfURL: pdfURL,
+                pageIndex: pageIndex,
+                promptState: promptState
+            )
+        } else {
+            textOnlyHeader(promptState: promptState)
+        }
+    }
+
+    @ViewBuilder
+    private func slideThumbnailHeader(
+        slide: ResolvedRehearsalSlide,
+        pdfURL: URL,
+        pageIndex: Int,
+        promptState: RehearsalVisiblePromptState
+    ) -> some View {
+        let artwork = SlideArtworkView(
+            pdfURL: pdfURL,
+            pageIndex: pageIndex,
+            aspectRatio: slide.aspectRatio,
+            slideNumber: slide.slideIndex + 1,
+            totalSlides: slide.totalSlidesInSection,
+            visibleSlideTitle: promptState.visibleSlideTitle,
+            maxHeight: isAccessibilitySize ? 104 : 64,
+            isDarkStage: true,
+            compact: true
+        )
+
+        let titleColumn = VStack(alignment: .leading, spacing: 2) {
             Text("\(section.talkSectionIndex + 1). \(section.title)")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: false, vertical: true)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(isAccessibilitySize ? 2 : 1)
                 .accessibilityAddTraits(.isHeader)
 
-            if isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(section.speakerSummary, systemImage: section.speakerRole.symbolName)
-                    Label(section.purpose.displayName, systemImage: section.purpose.symbolName)
-                }
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.82))
+            if let visibleTitle = promptState.visibleSlideTitle, !visibleTitle.isEmpty {
+                Text(visibleTitle)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(isAccessibilitySize ? 3 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("rehearsalSlideTitleLabel")
+
+                Text("Page \(pageIndex + 1)")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.58))
             } else {
-                HStack(spacing: 12) {
-                    Label(section.speakerSummary, systemImage: section.speakerRole.symbolName)
-                    Label(section.purpose.displayName, systemImage: section.purpose.symbolName)
+                Text("Slide \(slide.slideIndex + 1) of \(max(slide.totalSlidesInSection, 1)) · Page \(pageIndex + 1)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.70))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        Group {
+            if isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    artwork
+                    titleColumn
                 }
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.82))
+            } else {
+                HStack(alignment: .center, spacing: 12) {
+                    artwork
+                    titleColumn
+                }
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
+    private func textOnlyHeader(promptState: RehearsalVisiblePromptState) -> some View {
+        let slideTitle = promptState.visibleSlideTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasDistinctSlideTitle = !(slideTitle?.isEmpty ?? true) && slideTitle != section.title
+        return VStack(alignment: .leading, spacing: 2) {
+            if hasDistinctSlideTitle, let slideTitle {
+                Text("\(section.talkSectionIndex + 1). \(section.title)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.70))
+                    .lineLimit(isAccessibilitySize ? 2 : 1)
+                    .accessibilityAddTraits(.isHeader)
+
+                Text(slideTitle)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(isAccessibilitySize ? 3 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("rehearsalSlideTitleLabel")
+            } else {
+                Text("\(section.talkSectionIndex + 1). \(section.title)")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
     }
@@ -159,21 +219,22 @@ struct FullRunFullscreenScriptContent: View {
             heading = "Handoff Cue"
         }
 
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 4) {
             Label(heading, systemImage: "arrow.triangle.turn.up.right.diamond")
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(Color(red: 0.72, green: 0.90, blue: 1.0))
             Text("“\(cue)”")
-                .font(.callout.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
         )
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("fullRunFullscreenHandoffCue")

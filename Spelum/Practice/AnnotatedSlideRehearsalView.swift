@@ -1,6 +1,24 @@
 import CoreGraphics
 import SwiftUI
 
+struct RehearsalChromeOptions: Sendable, Equatable {
+    let showsHeader: Bool
+    let showsArtwork: Bool
+    let showsRevealButton: Bool
+
+    static let full = RehearsalChromeOptions(
+        showsHeader: true,
+        showsArtwork: true,
+        showsRevealButton: true
+    )
+
+    static let scriptOnly = RehearsalChromeOptions(
+        showsHeader: false,
+        showsArtwork: false,
+        showsRevealButton: false
+    )
+}
+
 struct AnnotatedSlideRehearsalView: View {
     let slides: [ResolvedRehearsalSlide]
     let activeSlideIndex: Int
@@ -14,6 +32,7 @@ struct AnnotatedSlideRehearsalView: View {
     let isActiveTake: Bool
     let isAccessibilitySize: Bool
     let theme: RehearsalSurfaceTheme
+    let chrome: RehearsalChromeOptions
     let storageRootURL: URL
     let fillsAvailableHeight: Bool
     let scriptScrollMaxHeight: CGFloat?
@@ -41,6 +60,7 @@ struct AnnotatedSlideRehearsalView: View {
         isActiveTake: Bool,
         isAccessibilitySize: Bool,
         theme: RehearsalSurfaceTheme,
+        chrome: RehearsalChromeOptions = .full,
         storageRootURL: URL = SlideDeckStorage.defaultStorageRootURL(),
         fillsAvailableHeight: Bool = false,
         scriptScrollMaxHeight: CGFloat? = nil,
@@ -67,6 +87,7 @@ struct AnnotatedSlideRehearsalView: View {
         self.isActiveTake = isActiveTake
         self.isAccessibilitySize = isAccessibilitySize
         self.theme = theme
+        self.chrome = chrome
         self.storageRootURL = storageRootURL
         self.fillsAvailableHeight = fillsAvailableHeight
         self.scriptScrollMaxHeight = scriptScrollMaxHeight
@@ -120,11 +141,12 @@ struct AnnotatedSlideRehearsalView: View {
     var body: some View {
         let promptState = visiblePromptState
         VStack(alignment: .leading, spacing: 12) {
-            if showSlidePositionHeader, let slide = activeSlide {
+            if chrome.showsHeader, showSlidePositionHeader, let slide = activeSlide {
                 positionAndNavigationHeader(for: slide, promptState: promptState)
             }
 
-            if let slide = activeSlide,
+            if chrome.showsArtwork,
+               let slide = activeSlide,
                let pdfURL = slide.resolvedDeckURL(storageRootURL: storageRootURL),
                let pageIndex = slide.pdfPageIndex {
                 SlideArtworkView(
@@ -141,7 +163,7 @@ struct AnnotatedSlideRehearsalView: View {
 
             scriptContentContainer(promptState: promptState)
 
-            if practiceMode.supportsReveal {
+            if chrome.showsRevealButton, practiceMode.supportsReveal {
                 revealControlButton
             }
         }

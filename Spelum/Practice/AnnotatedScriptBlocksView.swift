@@ -17,7 +17,7 @@ struct AnnotatedScriptBlocksView: View {
     let scriptAccessibilityIdentifier: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: theme.isDarkStage ? 12 : 14) {
             if blocks.isEmpty {
                 emptyVisualSlidePlaceholder
             } else {
@@ -41,7 +41,7 @@ struct AnnotatedScriptBlocksView: View {
             let spokenLabel = AnnotatedScriptInlineParser.accessibleDescription(for: tokens)
             Text(attributed)
                 .font(speechFont)
-                .lineSpacing(6)
+                .lineSpacing(theme.isDarkStage ? 5 : 6)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(spokenLabel)
@@ -53,27 +53,29 @@ struct AnnotatedScriptBlocksView: View {
     }
 
     private func directionBlock(_ text: String, index: Int) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: theme.isDarkStage ? 8 : 10) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(directionAccentColor)
-                .frame(width: 4)
+                .frame(width: theme.isDarkStage ? 3 : 4)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Label("Direction", systemImage: "text.bubble")
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(directionAccentColor)
+                if !theme.isDarkStage {
+                    Label("Direction", systemImage: "text.bubble")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(directionAccentColor)
+                }
 
                 Text(text)
-                    .font(.callout.italic())
+                    .font(theme.isDarkStage ? .subheadline.italic() : .callout.italic())
                     .foregroundStyle(directionBodyColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, theme.isDarkStage ? 10 : 12)
+        .padding(.vertical, theme.isDarkStage ? 7 : 10)
         .background(directionSurfaceColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)

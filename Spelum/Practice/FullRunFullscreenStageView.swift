@@ -95,6 +95,8 @@ struct FullRunFullscreenStageView: View {
     let isAccessibilitySize: Bool
     let onExitFullscreen: () -> Void
 
+    @State private var showsSlidePreview = true
+
     private var activeSection: FullRunSectionSnapshot? {
         session.currentFullRunSection ?? snapshot.sections.first
     }
@@ -103,15 +105,25 @@ struct FullRunFullscreenStageView: View {
         isAccessibilitySize || verticalSizeClass == .compact
     }
 
+    private var hasStepNav: Bool {
+        session.currentFullRunSlides.count > 1 || snapshot.sections.count > 1
+    }
+
+    private var activeSlideHasArtwork: Bool {
+        guard let slide = session.currentFullRunSlide else { return false }
+        return slide.resolvedDeckURL(storageRootURL: session.attemptStore.storageRootURL) != nil
+            && slide.pdfPageIndex != nil
+    }
+
     var body: some View {
         ZStack {
             FullRunGlowingBlueBackground(isActiveTake: session.isActiveTake)
 
             VStack(spacing: 0) {
-                topStageBar
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 12)
+                topStatusBar
+                    .padding(.horizontal, 18)
+                    .padding(.top, 4)
+                    .padding(.bottom, 6)
 
                 if usesStageScroll {
                     scrollableStage
@@ -126,27 +138,22 @@ struct FullRunFullscreenStageView: View {
     }
 
     @ViewBuilder
-    private var topStageBar: some View {
+    private var topStatusBar: some View {
         if isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center) {
-                    statusPill
-                    Spacer()
-                    exitFullscreenButton
-                }
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
-                    progressBadge
-                    Spacer()
+                    statusPill
+                    Spacer(minLength: 8)
                     timerLabel
                 }
+                progressBadge
             }
         } else {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
                 statusPill
                 progressBadge
                 Spacer(minLength: 8)
                 timerLabel
-                exitFullscreenButton
             }
         }
     }
@@ -154,52 +161,39 @@ struct FullRunFullscreenStageView: View {
     @ViewBuilder
     private var statusPill: some View {
         let info = statusInfo
-        HStack(spacing: 6) {
-            Image(systemName: info.symbol)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(info.tint)
+        HStack(spacing: 5) {
+            Circle()
+                .fill(info.tint)
+                .frame(width: 7, height: 7)
             Text(info.title)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.white.opacity(0.14), in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.12), in: Capsule())
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("fullRunFullscreenStatusPill")
     }
 
     private struct StageStatusBadge {
         let title: String
-        let symbol: String
         let tint: Color
     }
 
     private var statusInfo: StageStatusBadge {
         switch session.phase {
         case .recording:
-            StageStatusBadge(
-                title: "Recording",
-                symbol: "record.circle.fill",
-                tint: Color(red: 1.0, green: 0.42, blue: 0.42)
-            )
+            StageStatusBadge(title: "Recording", tint: Color(red: 1.0, green: 0.42, blue: 0.42))
         case .silentRecall:
-            StageStatusBadge(
-                title: "Silent Run",
-                symbol: "mic.slash.circle.fill",
-                tint: Color(red: 0.56, green: 0.85, blue: 1.0)
-            )
+            StageStatusBadge(title: "Silent Run", tint: Color(red: 0.56, green: 0.85, blue: 1.0))
         case .requestingPermission:
-            StageStatusBadge(title: "Checking Mic", symbol: "mic.fill", tint: .white.opacity(0.85))
+            StageStatusBadge(title: "Checking Mic", tint: .white.opacity(0.85))
         case .finalizing:
-            StageStatusBadge(title: "Saving", symbol: "arrow.down.circle.fill", tint: .white.opacity(0.85))
+            StageStatusBadge(title: "Saving", tint: .white.opacity(0.85))
         default:
-            StageStatusBadge(
-                title: "Ready",
-                symbol: "waveform",
-                tint: Color(red: 0.65, green: 0.88, blue: 1.0)
-            )
+            StageStatusBadge(title: "Ready", tint: Color(red: 0.65, green: 0.88, blue: 1.0))
         }
     }
 
@@ -208,24 +202,27 @@ struct FullRunFullscreenStageView: View {
         let slideCount = session.currentFullRunSlides.count
         let slideNum = min(max(session.currentFullRunSlideIndex + 1, 1), max(slideCount, 1))
         let labelText = slideCount > 1
-            ? "Sec \(current)/\(snapshot.sections.count) · Slide \(slideNum)/\(slideCount)"
-            : "\(current)/\(snapshot.sections.count)"
+            ? "Sec \(current)/\(snapshot.sections.count) · \(slideNum)/\(slideCount)"
+            : "Sec \(current)/\(snapshot.sections.count)"
         let accessibleLabel = slideCount > 1
             ? "Section \(current) of \(snapshot.sections.count), Slide \(slideNum) of \(slideCount)"
             : "Section \(current) of \(snapshot.sections.count)"
         return Text(labelText)
-            .font(.subheadline.weight(.semibold))
+            .font(.caption.weight(.semibold))
             .monospacedDigit()
-            .foregroundStyle(.white.opacity(0.86))
+            .foregroundStyle(.white.opacity(0.76))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .accessibilityLabel(accessibleLabel)
             .accessibilityIdentifier("fullRunFullscreenProgressLabel")
     }
 
     private var timerLabel: some View {
         Text(RehearsalTimeFormatter.clockString(for: session.elapsedDuration))
-            .font(.headline.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.white)
+            .lineLimit(1)
             .accessibilityLabel("Total run elapsed time")
             .accessibilityValue(
                 RehearsalTimeFormatter.accessibleDurationString(for: session.elapsedDuration)
@@ -233,24 +230,8 @@ struct FullRunFullscreenStageView: View {
             .accessibilityIdentifier("fullRunFullscreenTimerLabel")
     }
 
-    private var exitFullscreenButton: some View {
-        Button(action: onExitFullscreen) {
-            Image(systemName: "arrow.down.right.and.arrow.up.left")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(minWidth: 44, minHeight: 44)
-                .background(Color.white.opacity(0.16), in: Circle())
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.24), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Exit Fullscreen")
-        .accessibilityHint("Returns to Full Run setup without stopping an active rehearsal.")
-        .accessibilityIdentifier("fullRunExitFullscreenButton")
-    }
-
     var fullscreenScriptContent: FullRunFullscreenScriptContent? {
         guard let section = activeSection else { return nil }
-        let hasStepNav = session.currentFullRunSlides.count > 1 || snapshot.sections.count > 1
         return FullRunFullscreenScriptContent(
             section: section,
             slides: session.currentFullRunSlides,
@@ -262,20 +243,8 @@ struct FullRunFullscreenStageView: View {
             isActiveTake: session.isActiveTake,
             isAccessibilitySize: isAccessibilitySize,
             usesStageScroll: usesStageScroll,
+            showsSlidePreview: showsSlidePreview,
             storageRootURL: session.attemptStore.storageRootURL,
-            canGoPrevious: session.canRetreatFullRunStep,
-            previousButtonLabel: session.hasPreviousSlideInCurrentSection
-                ? "Previous Slide"
-                : "Previous Section",
-            onPrevious: hasStepNav ? { _ = session.retreatFullRunStep() } : nil,
-            canGoNext: session.canAdvanceFullRunStep,
-            nextButtonLabel: session.hasNextSlideInCurrentSection
-                ? "Next Slide"
-                : "Next Section",
-            onNext: hasStepNav ? { _ = session.advanceFullRunStep() } : nil,
-            onSelectSlideIndex: session.currentFullRunSlides.count > 1
-                ? { session.selectFullRunSlide(index: $0) }
-                : nil,
             onToggleReveal: { session.toggleReveal() }
         )
     }
@@ -300,9 +269,21 @@ struct FullRunFullscreenStageView: View {
     }
 
     private var controlsDock: some View {
-        FullRunFullscreenControlsDock(
+        let shouldConcealSlideTitle = visiblePromptState?.shouldConcealSlideTitle ?? false
+        return FullRunFullscreenControlsDock(
             session: session,
+            sectionTitle: activeSection?.title ?? "",
+            slides: session.currentFullRunSlides,
+            activeSlideIndex: session.currentFullRunSlideIndex,
+            hasStepNav: hasStepNav,
+            hasSlideArtwork: activeSlideHasArtwork,
+            showsSlidePreview: showsSlidePreview,
+            shouldConcealSlideTitle: shouldConcealSlideTitle,
             isAccessibilitySize: isAccessibilitySize,
+            onToggleSlidePreview: { showsSlidePreview.toggle() },
+            onSelectSlideIndex: session.currentFullRunSlides.count > 1
+                ? { session.selectFullRunSlide(index: $0) }
+                : nil,
             onExitFullscreen: onExitFullscreen
         )
     }
@@ -311,9 +292,9 @@ struct FullRunFullscreenStageView: View {
         Group {
             if let content = fullscreenScriptContent {
                 content
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 2)
+                    .padding(.bottom, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
