@@ -11,6 +11,7 @@ struct SlideArtworkView: View {
     let visibleSlideTitle: String?
     let maxHeight: CGFloat
     let isDarkStage: Bool
+    var compact: Bool = false
 
     @Environment(\.displayScale) private var displayScale
     @State private var renderedImage: UIImage?
@@ -28,7 +29,7 @@ struct SlideArtworkView: View {
             artworkFrame
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: compact ? nil : .infinity, alignment: .center)
         .accessibilityLabel(accessibleArtworkLabel)
         .accessibilityHint("Double-tap to open an enlarged zoomable view of this slide.")
         .accessibilityIdentifier("slideArtworkButton_page_\(pageIndex)")
@@ -58,40 +59,62 @@ struct SlideArtworkView: View {
     }
 
     private var artworkFrame: some View {
-        ZStack(alignment: .bottomTrailing) {
+        let cornerRadius: CGFloat = compact ? 8 : 12
+        return ZStack(alignment: .bottomTrailing) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(isDarkStage ? Color.white.opacity(0.10) : Color(.tertiarySystemGroupedBackground))
 
                 if let renderedImage {
                     Image(uiImage: renderedImage)
                         .resizable()
                         .scaledToFit()
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: max(cornerRadius - 1, 6), style: .continuous))
                 } else if loadFailed {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 4) {
                         Image(systemName: "doc.richtext")
-                            .font(.title3)
-                        Text("Slide page \(pageIndex + 1) unavailable")
-                            .font(.caption)
+                            .font(compact ? .caption : .title3)
+                        if !compact {
+                            Text("Slide page \(pageIndex + 1) unavailable")
+                                .font(.caption)
+                        }
                     }
                     .foregroundStyle(isDarkStage ? Color.white.opacity(0.75) : .secondary)
-                    .padding()
+                    .padding(compact ? 6 : 12)
                 } else {
                     ProgressView()
+                        .scaleEffect(compact ? 0.75 : 1.0)
                         .tint(isDarkStage ? .white : nil)
                 }
             }
             .aspectRatio(clampedAspectRatio, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: maxHeight)
+            .frame(
+                maxWidth: compact ? min(maxHeight * clampedAspectRatio, 132) : nil,
+                maxHeight: maxHeight
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
                         isDarkStage ? Color.white.opacity(0.24) : Color.primary.opacity(0.14),
                         lineWidth: 1
                     )
             }
 
+            enlargeBadge
+        }
+    }
+
+    @ViewBuilder
+    private var enlargeBadge: some View {
+        if compact {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(4)
+                .background(Color.black.opacity(0.66), in: Circle())
+                .padding(4)
+                .accessibilityHidden(true)
+        } else {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.caption2.weight(.semibold))
